@@ -7,6 +7,7 @@
 #include "psxcore_file.h"
 #include "psxcore_shared_store.h"
 #include "options.h"
+#include "storage.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -22,8 +23,10 @@ int lunaPsxPrepareTitleCardsAutomatic(Target *target,const LunaPsxVmcSettings *s
     int createCards,char *error,size_t size,
     int (*progress)(uint64_t completed,uint64_t total), LunaPsxVmcChoose choose) {
     if(!target || target->platform!=TARGET_PS1 || !target->device ||
-       target->device->mode!=MODE_ATA || target->device->index!=0)
-        return titleError(error,size,"PS1 games require the internal ATA drive.");
+       !(STORAGE_SETTINGS.enabled & target->device->mode) ||
+       !((target->device->mode==MODE_ATA && target->device->index==0) ||
+         (target->device->mode==MODE_USB && target->device->index<=1)))
+        return titleError(error,size,"PS1 games require an enabled internal ATA or USB drive.");
     const char *path=target->fullPath;
     if(!path || strlen(path)<8 || strncmp(path,"mass",4) || path[4]<'0' || path[4]>'9' ||
        path[5]!=':' || strlen(path+6)>=NP_FILE_PATH_BYTES ||
@@ -78,7 +81,9 @@ int lunaPsxPrepareTitleCardsAutomatic(Target *target,const LunaPsxVmcSettings *s
     if(!slash || (size_t)(slash-NEUTRINO_ELF_PATH)+sizeof("/psxcore-runtime-bootstrap.elf")>sizeof(bootstrap))
         return titleError(error,size,"Cannot locate PSXCore beside the LUNA runtime.");
     snprintf(bootstrap,sizeof(bootstrap),"%.*s/psxcore-runtime-bootstrap.elf",(int)(slash-NEUTRINO_ELF_PATH),NEUTRINO_ELF_PATH);
-    const char *args[20]={"--file",path};unsigned count=2;
+    char discDevice[4];snprintf(discDevice,sizeof(discDevice),"%u",(unsigned)target->device->index);
+    const char *args[LUNA_PSX_MAX_ARGS]={"--file",path,"--backend",
+        target->device->mode==MODE_USB?"usb":"ata","--device",discDevice};unsigned count=6;
 #ifdef LUNA_EMULATOR_BUILD
     args[count++]="--pcsx2";
 #endif

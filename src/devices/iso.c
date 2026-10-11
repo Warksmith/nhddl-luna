@@ -150,7 +150,8 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
       fileext = strrchr(entry->d_name, '.');
       int isVcd = 0;
 #ifdef LUNA_ENABLE_PSXCORE
-      isVcd = device->mode == MODE_ATA && device->index == 0 && np_vcd_filename(entry->d_name);
+      isVcd = ((device->mode == MODE_ATA && device->index == 0) ||
+               (device->mode == MODE_USB && device->index <= 1)) && np_vcd_filename(entry->d_name);
 #endif
       if (isVcd || ((fileext != NULL) && (!strcmp(fileext, ".iso") || !strcmp(fileext, ".ISO")))) {
         // Generate full path
