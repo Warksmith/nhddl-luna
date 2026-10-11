@@ -153,6 +153,9 @@ int oplPrepareVmcs(Target *target, ArgumentList *arguments, const LunaOplDevice 
       }
       if (validateMap(cards[slot]))
         return -EINVAL;
+      if ((target->device->mode == MODE_ATA || target->device->mode == MODE_HDL) &&
+          oplFragmentsNeedLba48(cards[slot]->frags, cards[slot]->frag_count))
+        disc->hddIsLBA48 = 1;
       // Refuse overlapping card images or extents that point inside the game ISO.
       for (unsigned int i = 0; i < cards[slot]->frag_count; i++) {
         bd_fragment_t *a = &cards[slot]->frags[i];

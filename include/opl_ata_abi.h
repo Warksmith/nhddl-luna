@@ -13,6 +13,16 @@
 #define OPL_ATA_CORE_MAGIC_0 0x4D614730
 #define OPL_ATA_CORE_MAGIC_1 0x4D616731
 
+// Fragment addresses are physical 512-byte sectors. Any mapped sector beyond
+// the 28-bit range requires ATA extended commands, including VMC writes.
+static inline int oplFragmentsNeedLba48(const bd_fragment_t *frags, unsigned int count) {
+  for (unsigned int i = 0; i < count; i++)
+    if (frags[i].sector >= (1ULL << 28) ||
+        frags[i].count > (1ULL << 28) - frags[i].sector)
+      return 1;
+  return 0;
+}
+
 typedef struct {
   void *ptr;
   unsigned int info;

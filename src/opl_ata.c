@@ -34,7 +34,9 @@ _off64_t lseek64(int fd, _off64_t offset, int whence);
 #define OPL_STORAGE_LIMIT 0x000D0000u // Match OPL's reserved module region.
 #define OPL_CORE_START 0x00084000u
 #define OPL_CORE_LIMIT OPL_STORAGE_START
-#define OPL_CLEAR_END 0x00100000u
+// nhddl/linkfile reserves this address onward for libkernel and ELF handoff.
+// They must remain executable until ExecPS2 enters the OPL core.
+#define OPL_CLEAR_END 0x000F4000u
 #define OPL_PAYLOAD_LIMIT (128 * 1024)
 #define OPL_MODULE_INFO(id, size) (((id) << 24) | (size))
 #define ATA_DEVCTL_IS_48BIT 0x6840
@@ -161,6 +163,8 @@ static int prepareDisc(Target *target, uint8_t compat, const LunaOplDevice *devi
   if (settings == NULL)
     return -EINVAL;
   discSettings = settings;
+  // The on-disk marker is not a valid layer boundary for single-layer games.
+  settings->common.layer1_start = 0;
 
   int fd = open(target->fullPath, O_RDONLY);
   if (fd < 0)
@@ -262,9 +266,15 @@ static int prepareDisc(Target *target, uint8_t compat, const LunaOplDevice *devi
   settings->fragfile[0].frag_start = 0;
   settings->fragfile[0].frag_count = fragments;
   int lba48 = 0;
-  if (target->device->mode == MODE_ATA || target->device->mode == MODE_HDL)
+  if (target->device->mode == MODE_ATA || target->device->mode == MODE_HDL) {
     lba48 = fileXioDevctl("xhdd0:", ATA_DEVCTL_IS_48BIT, NULL, 0, NULL, 0);
-  settings->hddIsLBA48 = lba48 > 0;
+    // LUNA's ata_bd stack has no OPL xhdd device. Preserve the addressing
+    // required by the map instead of treating an unsupported query as LBA28.
+    settings->hddIsLBA48 = lba48 > 0 ||
+        oplFragmentsNeedLba48(settings->frags, fragments);
+  } else {
+    settings->hddIsLBA48 = 0;
+  }
   DPRINTF("OPL: %s, %d fragments, device %u, LBA48 %u\n", target->id,
           fragments, target->device->index, settings->hddIsLBA48);
   return 0;
@@ -601,7 +611,7 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
   }
 
   // Commit the handoff only after all checks that can fall back to Neutrino.
-  // OPL clears this range before installing its EE core and IOP modules.
+  // Preserve LUNA's libkernel region above OPL_CLEAR_END during installation.
   ambientStop();
   memset((void *)OPL_CORE_START, 0, OPL_CLEAR_END - OPL_CORE_START);
   for (int i = 0; i < moduleCount; i++) {
