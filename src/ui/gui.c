@@ -323,9 +323,6 @@ void closeUI() {
 
 // Main UI loop. Displays the target list.
 int uiLoop(TargetList *titles, int preparedCollectionIdx) {
-#ifdef LUNA_ENABLE_PSXCORE
-  lunaPsxVmcLibrary(titles);
-#endif
   // Reinitialize UI if video mode doesn't match
   if ((LAUNCHER_OPTIONS.vmode != VMODE_NONE) && (gsGlobal->Mode != LAUNCHER_OPTIONS.vmode)) {
     uiInit();
@@ -1447,7 +1444,7 @@ static void drawPsxLaunchMessage(const char *message,const char *footer) {
 static int psxPrepareProgress(uint64_t completed,uint64_t total) {
   char message[128];
   if(total)snprintf(message,sizeof(message),"%s\n%u%% (%u / %u MiB)",
-    lunaText("Checking PS1 save identity..."),(unsigned)(completed*100/total),
+    lunaText("Checking PS1 memory cards..."),(unsigned)(completed*100/total),
     (unsigned)(completed>>20),(unsigned)(total>>20));
   else snprintf(message,sizeof(message),"%s",lunaText("Preparing PS1 game..."));
   drawPsxLaunchMessage(message,lunaText("Press Triangle to cancel"));
@@ -1457,7 +1454,7 @@ int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection)
   char error[192];int createCards=0;
   for(;;) {
     if(psxPrepareProgress(0,0))return 0;
-    int result=lunaPsxPrepareTitleCardsAutomatic(target,selection,createCards,error,sizeof(error),psxPrepareProgress,uiPs1VmcChooseSaves);
+    int result=lunaPsxPrepareTitleCards(target,selection,createCards,error,sizeof(error),psxPrepareProgress);
     if(!result)lunaPsxExecute();
     for(;;) {
       drawPsxLaunchMessage(error,result==1?NULL:lunaText("Press Triangle to return"));

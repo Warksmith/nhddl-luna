@@ -930,7 +930,7 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
                          1, selectorY, lunaText("Virtual memory cards"), NULL);
       drawTextWindow(baseX + 18, menuBottom, gsGlobal->Width - baseX,
                      gsGlobal->Height - footerHeight, 0, HeaderTextColor, ALIGN_LEFT,
-                     lunaText("Cards are prepared at launch. Open to manage saves or change automatic behavior."));
+                     lunaText("Open to select shared memory cards or manage saves."));
     } else {
 #ifdef LUNA_ENABLE_PSXCORE
     const char *labels[] = {"Card behavior", "Slot 1", "Slot 2", "Manage cards"};
@@ -952,7 +952,7 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
     drawTextWindow(baseX + 18, menuBottom, gsGlobal->Width - baseX,
         gsGlobal->Height - footerHeight, 0, HeaderTextColor, ALIGN_LEFT,
         state->vmcStatus[0] ? lunaText(state->vmcStatus) :
-        lunaText("Automatic prepares cards at launch and shares them across verified discs of the same game."));
+        lunaText("Games using the same cards share their saved data. Missing default cards are created at launch."));
 #else
     drawTextWindow(baseX, menuTop, gsGlobal->Width - baseX, 0, 0,
                    HeaderTextColor, ALIGN_HCENTER, state->titleHeader);
@@ -960,11 +960,11 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
     drawOptionsTextRow(baseX, menuTop + lineHeight * 4, gsGlobal->Width - baseX,
                        0, 0, "Game core", "PSXCore");
     drawOptionsTextRow(baseX, menuTop + lineHeight * 6, gsGlobal->Width - baseX,
-                       0, 0, "Memory cards", "Isolated per disc");
+                       0, 0, "Memory cards", "Shared cards");
     drawTextWindow(baseX + 18, menuBottom - lineHeight * 2,
                    gsGlobal->Width - baseX, gsGlobal->Height - footerHeight, 0,
                    HeaderTextColor, ALIGN_LEFT,
-                   "PSXCore manages compatibility and saves.\nMissing cards can be created when launching.");
+                   "LUNA prepares shared memory cards before launch.");
 #endif
     }
   } else {
@@ -1592,7 +1592,7 @@ static int handleGameInput(OptionsMenuState *state, int input) {
     if (input & PAD_DOWN) { state->selectedGameRow = (state->selectedGameRow + 1) % 4; return 0; }
     if (!state->ps1CardsReady) {
       if ((input & (PAD_CROSS | PAD_CIRCLE | PAD_START | PAD_SQUARE)) &&
-          uiPs1VmcRetry(state->vmcStatus)) loadPs1Cards(state);
+          uiPs1VmcRetry(state->target, state->vmcStatus)) loadPs1Cards(state);
       return 0;
     }
     if (input & PAD_SQUARE) return uiLaunchPs1Cards(state->target, &state->ps1Cards);
@@ -1606,19 +1606,7 @@ static int handleGameInput(OptionsMenuState *state, int input) {
       int changed = 0;
       if (!state->selectedGameRow) changed = uiPs1VmcPolicy(state->target, &state->ps1Cards);
       else {
-        unsigned oldMode = state->ps1Cards.mode;
-        const char *error = uiPs1VmcPrepare(state->target, &state->ps1Cards);
-        while (error) {
-          snprintf(state->vmcStatus, sizeof(state->vmcStatus), "%s", error);
-          DPRINTF("PS1 manage cards: path=%s row=%d error=%s\n", state->target->fullPath, state->selectedGameRow, error);
-          if (!uiPs1VmcRetry(error)) break;
-          error = uiPs1VmcPrepare(state->target, &state->ps1Cards);
-        }
-        if (!error) {
-          state->vmcStatus[0] = 0;
-          uiPs1VmcManage(&state->ps1Cards, state->selectedGameRow <= 2 ? state->selectedGameRow - 1 : -1);
-        }
-        if (oldMode != state->ps1Cards.mode) changed = 1;
+        uiPs1VmcManage(&state->ps1Cards, state->selectedGameRow <= 2 ? state->selectedGameRow - 1 : -1);
       }
       if (changed) {
         state->titleArgumentsChanged = 1; state->saveError = 0;

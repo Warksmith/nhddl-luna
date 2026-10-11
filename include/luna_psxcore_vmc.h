@@ -1,46 +1,35 @@
 #ifndef LUNA_PSXCORE_VMC_H
 #define LUNA_PSXCORE_VMC_H
-
 #include "target.h"
-#include "psxcore_shared.h"
+#include "psxcore_file.h"
 #include <stddef.h>
 #include <stdint.h>
 
+// Preferences select cards; they never authorize a game to use them.
 typedef struct LunaPsxVmcSettings {
-  unsigned char disc[32], volume[16];
-  char key[33]; // Empty selects the existing private card pair.
-  char gameRoot[8]; // Transient mount name; never persisted as media identity.
-  unsigned mode; // Automatic is the default; explicit legacy choices stay manual.
+  unsigned char volume[16];
+  char key[49]; // Empty selects Sony's default pair on the game drive.
+  char gameRoot[8], gamePath[NP_FILE_PATH_BYTES];
+  unsigned mode;
 } LunaPsxVmcSettings;
-enum { LUNA_PS1_CARDS_AUTO, LUNA_PS1_CARDS_PRIVATE, LUNA_PS1_CARDS_SHARED };
-
+enum { LUNA_PS1_CARDS_DEFAULT, LUNA_PS1_CARDS_CUSTOM };
 typedef int (*LunaPsxVmcProgress)(uint64_t completed, uint64_t total);
-// Return a source-card index, or -1 to cancel. Called only for conflicting saves.
-typedef int (*LunaPsxVmcChoose)(const char *const *labels, unsigned count);
-void lunaPsxVmcLibrary(const TargetList *library);
-const char *lunaPsxVmcGroup(const char *discId, char key[33]);
-const char *lunaPsxVmcAutomatic(Target *target, LunaPsxVmcSettings *settings,
-    int create, LunaPsxVmcProgress progress, LunaPsxVmcChoose choose);
 struct DeviceMapEntry;
 int lunaPsxVmcDevice(const struct DeviceMapEntry *device, char root[8]);
+int lunaPsxVmcKeyValid(const char *key);
 const char *lunaPsxVmcVolume(const char *root, unsigned char id[16], int create);
 const char *lunaPsxVmcFindVolume(const unsigned char id[16], char root[8]);
-const char *lunaPsxVmcLoad(Target *target, LunaPsxVmcSettings *settings,
-                          LunaPsxVmcProgress progress);
+const char *lunaPsxVmcLoad(Target *target, LunaPsxVmcSettings *settings, LunaPsxVmcProgress progress);
 const char *lunaPsxVmcSave(const LunaPsxVmcSettings *settings);
+// Archive damaged/interrupted preferences and return to defaults; cards untouched.
+const char *lunaPsxVmcReset(Target *target);
 const char *lunaPsxVmcBase(const LunaPsxVmcSettings *settings, char base[128]);
-const char *lunaPsxVmcPrivate(const LunaPsxVmcSettings *settings, int create);
-const char *lunaPsxVmcCreate(const char *root, const char *name,
-                            const LunaPsxVmcSettings *source, NpSharedSet *set);
-const char *lunaPsxVmcEnroll(const char *root, const char *key,
-                            const unsigned char disc[32], int enroll);
-const char *lunaPsxVmcRename(const char *base, const char *name);
+const char *lunaPsxVmcPaths(const char *base, char cards[2][NP_FILE_PATH_BYTES]);
+const char *lunaPsxVmcPrepare(const LunaPsxVmcSettings *settings, int create);
+const char *lunaPsxVmcCreate(const char *root, const char *name, char key[49]);
 const char *lunaPsxVmcCard(const char *path, unsigned char hash[32]);
 const char *lunaPsxVmcBackup(const char *base, char out[256]);
-// Restore a pair, or import one raw card. Existing cards are backed up first.
 const char *lunaPsxVmcReplace(const char *base, const char *source, int slot);
 const char *lunaPsxVmcExport(const char *source, const char *destination);
-void lunaPsxVmcDiscName(const char *root, const unsigned char disc[32], char *name, size_t size);
-void lunaPsxVmcRememberDisc(const char *root, const unsigned char disc[32], const char *name);
-
+const char *lunaPsxVmcRecover(const char *base, int slot, const char *suffix);
 #endif

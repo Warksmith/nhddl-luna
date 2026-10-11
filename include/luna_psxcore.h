@@ -11,8 +11,8 @@ struct LunaPsxVmcSettings;
 #define LUNA_PSX_CONTROL 0x01401000u
 #define LUNA_PSX_STUB 0x01402000u
 #define LUNA_PSX_STACK 0x01410000u
-#define LUNA_PSX_MAX_ARGS 24u
-#define LUNA_PSX_ARGUMENT_BYTES 1024u
+#define LUNA_PSX_MAX_ARGS 32u
+#define LUNA_PSX_ARGUMENT_BYTES 1536u
 typedef struct {
     NpElf elf;
     uint32_t argc, argv[LUNA_PSX_MAX_ARGS];
@@ -33,10 +33,6 @@ int lunaPsxPrepareTitle(struct Target *target, int createCards, char *error, siz
 int lunaPsxPrepareTitleCards(struct Target *target, const struct LunaPsxVmcSettings *selection,
     int createCards, char *error, size_t size,
     int (*progress)(uint64_t completed, uint64_t total));
-int lunaPsxPrepareTitleCardsAutomatic(struct Target *target, const struct LunaPsxVmcSettings *selection,
-    int createCards, char *error, size_t size,
-    int (*progress)(uint64_t completed, uint64_t total),
-    int (*choose)(const char *const *labels, unsigned count));
 #ifdef LUNA_PSXCORE_DEVELOPMENT
 // Local HostFS file: bootstrap path, one CLI argument per line, optional final
 // "auto" line. Without auto, Select+Start invokes this entry from the library.

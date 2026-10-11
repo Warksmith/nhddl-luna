@@ -91,8 +91,7 @@ const char *lunaPsxDiscInfo(const char *path, char titleID[12]) {
   if(!error) {
     readSerial(file,(uint64_t)bytes,titleID);
     if(!titleID[0]) {
-      // A metadata-only identity for unidentified discs. Saves use PSXCore's
-      // full image digest, independent of artwork IDs and filenames.
+      // Artwork identity only; card selection is independent of disc hashes.
       NpSha256 hash; unsigned char digest[32],data[4096];
       np_sha256_init(&hash); np_sha256_update(&hash,header,sizeof(header));
       if(!fseek(file,NP_VCD_DATA_OFFSET,SEEK_SET)) {
