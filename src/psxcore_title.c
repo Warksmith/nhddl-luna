@@ -6,13 +6,36 @@
 #include "dprintf.h"
 #include "options.h"
 #include "storage.h"
+#include "psxcore_hash.h"
 #include <stdio.h>
 #include <string.h>
 
-static int readable(const char *path) {
-    FILE *f=fopen(path,"rb");if(!f)return 0;
-    int byte=fgetc(f),bad=ferror(f),closed=fclose(f);
-    return byte!=EOF && !bad && !closed;
+// Match the unchanged bootstrap's firmware profile before leaving the UI.
+static const char *firmwareCheck(const char *path,unsigned index) {
+    static const unsigned sizes[]={3166988,265233};
+    static const unsigned char hashes[2][32]={
+        {0x59,0xdf,0x33,0x89,0xc4,0xdf,0x88,0xa5,0x72,0xda,0xa7,0x20,0xb0,0x55,0x07,0xc5,
+         0x2c,0x34,0xed,0xdf,0xa0,0x03,0x1a,0x6f,0xbe,0xec,0x55,0xe0,0xc2,0xd0,0xfc,0xb1},
+        {0x33,0x38,0xb2,0x38,0xd8,0x4d,0x7d,0x58,0x6b,0x71,0x66,0x77,0xe3,0xa1,0xc0,0x3b,
+         0x20,0x88,0xb8,0x82,0xec,0xfa,0x17,0xf9,0x1f,0xc3,0x37,0x98,0x93,0x1c,0xa3,0xba}
+    };
+    FILE *f=fopen(path,"rb");if(!f)return "Missing or unreadable firmware";
+    const char *error=NULL;
+    if(fseek(f,0,SEEK_END) || ftell(f)!=(long)sizes[index])error="Unsupported firmware size";
+    if(!error && fseek(f,0,SEEK_SET))error="Cannot read firmware";
+    NpSha256 sha;unsigned char data[4096],actual[32];np_sha256_init(&sha);
+    for(unsigned done=0;!error && done<sizes[index];) {
+        unsigned take=sizes[index]-done;if(take>sizeof(data))take=sizeof(data);
+        if(fread(data,1,take,f)!=take){error="Cannot read firmware";break;}
+        np_sha256_update(&sha,data,take);done+=take;
+    }
+    if(!error && (fgetc(f)!=EOF || ferror(f)))error="Cannot read firmware";
+    if(fclose(f) && !error)error="Cannot read firmware";
+    if(!error) {
+        np_sha256_final(&sha,actual);
+        if(memcmp(actual,hashes[index],sizeof(actual)))error="Firmware does not match PSXCore";
+    }
+    return error;
 }
 static int titleError(char *out,size_t size,const char *message) {snprintf(out,size,"%s",message);return -1;}
 int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
@@ -35,7 +58,8 @@ int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
     char asset[192];const char *names[]={"POPS.ELF","IOPRP252.IMG"};
     for(unsigned i=0;i<2;++i) {
         snprintf(asset,sizeof(asset),"%.6s/POPS/%s",path,names[i]);
-        if(!readable(asset)){snprintf(error,size,"Missing or unreadable firmware: %s",asset);return -1;}
+        reason=firmwareCheck(asset,i);
+        if(reason){snprintf(error,size,"%s: %s",reason,asset);return -1;}
     }
     if(settings.mode==LUNA_PS1_CARDS_DEFAULT)createCards=1;
     reason=lunaPsxVmcPrepare(&settings,createCards);
@@ -75,6 +99,9 @@ int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
 #ifdef LUNA_EMULATOR_BUILD
     args[count++]="--pcsx2";
 #endif
+    // The pinned firmware's direct-file boot needs PSXCore's guarded license
+    // adapter. Use its public option; the core validates and owns the change.
+    args[count++]="--license";
     if(custom) {
         args[count++]="--volume-id";args[count++]=discId;
         args[count++]="--save-volume";args[count++]=saveRoot;
