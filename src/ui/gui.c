@@ -361,6 +361,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   int psbbnAnimationStartOffset = 0;
   uint32_t psbbnAnimationStart = 0;
   uint32_t psbbnAnimationDuration = PSBBN_ANIMATION_DURATION_MS;
+  uint32_t psbbnAnimationElapsedFrames = 0;
   LunaCollectionScan collectionScan = {0};
   int collectionVisualTitleIdx = -1;
   int collectionVisualCoverIdx = PSBBN_COVER_CACHE_FOCUS;
@@ -392,7 +393,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   uint32_t enabledViews = UI_VIEW_DEFAULT_MASK;
   uint32_t classicArtDueMs = 0;
   LunaNavRepeatState classicRepeat = {0};
-  LunaNavRepeatState psbbnRepeat = {0};
   LunaScrollFast scrollFast = {0};
   UILibraryView view = UI_VIEW_CLASSIC;
   int entryView = -1;
@@ -649,6 +649,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       int flowSelectedTitleIdx = selectedTitleIdx;
       uint32_t now = uiNowMs();
       int flowOffset;
+      int collectionFps = (gsGlobal->Mode == GS_MODE_PAL) ? 50 : 60;
 
       // Both cover workers return finished thumbnails without making the
       // glide clock wait for file I/O or decoding.
@@ -670,9 +671,14 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         psbbnAnimationStartOffset = 0;
         psbbnAnimationStart = now;
         psbbnAnimationDuration = PSBBN_ANIMATION_DURATION_MS;
+        psbbnAnimationElapsedFrames = 0;
       } else if (psbbnAnimationTargetIdx != flowSelectedTitleIdx) {
-        int currentOffset = lunaNavAnimatedOffset(psbbnAnimationStartOffset,
-            psbbnAnimationStart, psbbnAnimationDuration, now);
+        int currentOffset = view == UI_VIEW_PSBBN
+            ? lunaNavClassicGlideFrameOffset(psbbnAnimationStartOffset,
+                psbbnAnimationElapsedFrames,
+                lunaNavDurationFrames(psbbnAnimationDuration, collectionFps))
+            : lunaNavAnimatedOffset(psbbnAnimationStartOffset, psbbnAnimationStart,
+                                    psbbnAnimationDuration, now);
         int direction = lunaNavDirection(flowTitles->total, psbbnAnimationTargetIdx, flowSelectedTitleIdx);
         psbbnOutgoingTitleIdx = psbbnAnimationTargetIdx;
         psbbnAnimationStartOffset = currentOffset + direction * 1000;
@@ -693,12 +699,16 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         }
         psbbnAnimationTargetIdx = flowSelectedTitleIdx;
         psbbnAnimationStart = now;
+        psbbnAnimationElapsedFrames = 0;
       }
 
-      // Use elapsed time for the cover glide, matching the held-scan clock
-      // even when artwork processing makes a rendered frame take longer.
-      flowOffset = lunaNavAnimatedOffset(psbbnAnimationStartOffset,
-          psbbnAnimationStart, psbbnAnimationDuration, now);
+      // Collections advances its glide once per rendered frame.
+      flowOffset = view == UI_VIEW_PSBBN
+          ? lunaNavClassicGlideFrameOffset(psbbnAnimationStartOffset,
+              psbbnAnimationElapsedFrames,
+              lunaNavDurationFrames(psbbnAnimationDuration, collectionFps))
+          : lunaNavAnimatedOffset(psbbnAnimationStartOffset, psbbnAnimationStart,
+                                  psbbnAnimationDuration, now);
       if (view == UI_VIEW_PSBBN) {
         if (entryPending) {
           int entryCached = serviceCollectionEntryCovers(flowTitles, flowSelectedTitleIdx);
@@ -719,8 +729,9 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         entryStartMs = now;
         entryPending = 0;
       }
-      flowOffset = lunaNavAnimatedOffset(psbbnAnimationStartOffset, psbbnAnimationStart,
-                                        psbbnAnimationDuration, now);
+      if (view != UI_VIEW_PSBBN)
+        flowOffset = lunaNavAnimatedOffset(psbbnAnimationStartOffset, psbbnAnimationStart,
+                                          psbbnAnimationDuration, now);
       if (view == UI_VIEW_PSBBN) {
         collectionVisualCoverIdx = PSBBN_COVER_CACHE_FOCUS;
         if (flowOffset >= 500)
@@ -850,6 +861,11 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     gsKit_sync_flip(gsGlobal);
     if (view == UI_VIEW_CLASSIC)
       classicEntryFirstFramePending = 0;
+    if (view == UI_VIEW_PSBBN && psbbnAnimationTargetIdx >= 0 &&
+        psbbnAnimationElapsedFrames <
+            lunaNavDurationFrames(psbbnAnimationDuration,
+                                  gsGlobal->Mode == GS_MODE_PAL ? 50 : 60))
+      psbbnAnimationElapsedFrames++;
     usleep(view == UI_VIEW_CLASSIC && classicArtSubmittedIdx >= 0 ? 3000 : 1000);
 
     // Keep rendering after options close, while ignoring the Triangle press
@@ -921,7 +937,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       orbitRandomActive = 0;
       classicNavHeld = 0;
       classicRepeat = (LunaNavRepeatState){0};
-      psbbnRepeat = (LunaNavRepeatState){0};
     }
     if (quickMenu.captured || quickWasCaptured) {
       prevInput = 0;
@@ -999,12 +1014,9 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       forceViewSwitch = 0;
     }
 
-    if (view == UI_VIEW_PSBBN || view == UI_VIEW_ORBIT) {
-      // Cover navigation uses the timer below, independently of frame rate.
-      frameCount = 0;
-    } else if (view == UI_VIEW_ORBS) {
-      // Preserve Scroll's existing frame-based normal repeat cadence.
-      frameCount = (frameCount + 1) % ((gsGlobal->Mode == GS_MODE_PAL) ? SCROLL_REPEAT_FRAMES_PAL : SCROLL_REPEAT_FRAMES_NTSC);
+    if (view == UI_VIEW_PSBBN || view == UI_VIEW_ORBIT || view == UI_VIEW_ORBS) {
+      // Held directions repeat with rendered frames, using the original cadence.
+      frameCount = (frameCount + 1) % ((gsGlobal->Mode == GS_MODE_PAL) ? PSBBN_REPEAT_FRAMES_PAL : PSBBN_REPEAT_FRAMES_NTSC);
     } else if (gsGlobal->Mode == GS_MODE_PAL) {
       frameCount = (frameCount + 1) % 8; // Preserve Classic's established repeat cadence.
     } else {
@@ -1035,7 +1047,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       }
     }
 
-    if (view == UI_VIEW_CLASSIC || view == UI_VIEW_PSBBN || view == UI_VIEW_ORBIT) {
+    if (view == UI_VIEW_CLASSIC) {
       const int rawInput = input;
       const int navButtons = PAD_LEFT | PAD_RIGHT | PAD_UP | PAD_DOWN;
       int direction = 0;
@@ -1047,16 +1059,10 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         direction = 1;
         navInput = (rawInput & PAD_DOWN) ? PAD_DOWN : PAD_RIGHT;
       }
-      if (view == UI_VIEW_CLASSIC)
-        classicNavHeld = direction != 0;
+      classicNavHeld = direction != 0;
       input = rawInput & ~prevInput & ~navButtons;
-      LunaNavRepeatState *repeat = view == UI_VIEW_CLASSIC
-          ? &classicRepeat : &psbbnRepeat;
-      uint32_t delayMs = view == UI_VIEW_CLASSIC
-          ? CLASSIC_REPEAT_DELAY_MS : PSBBN_REPEAT_INTERVAL_MS;
-      uint32_t intervalMs = view == UI_VIEW_CLASSIC
-          ? CLASSIC_REPEAT_INTERVAL_MS : PSBBN_REPEAT_INTERVAL_MS;
-      if (lunaNavRepeatStep(repeat, direction, uiNowMs(), delayMs, intervalMs))
+      if (lunaNavRepeatStep(&classicRepeat, direction, uiNowMs(),
+                            CLASSIC_REPEAT_DELAY_MS, CLASSIC_REPEAT_INTERVAL_MS))
         input |= navInput;
       prevInput = rawInput;
       if (!input && quickAction < 0)
@@ -1206,7 +1212,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         resetAmbientOrbsOrbit(uiNowMs());
       scrollFast = (LunaScrollFast){0};
       collectionScan = (LunaCollectionScan){0};
-      psbbnRepeat = (LunaNavRepeatState){0};
 
       if (previousView == UI_VIEW_CLASSIC) {
         releaseClassicArtVRAM();
@@ -1373,7 +1378,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       if (!(enabledViews & (1U << view)))
         forceViewSwitch = 1;
       optionsTriangleHeld = (pollInput() & PAD_TRIANGLE) != 0;
-      psbbnRepeat = (LunaNavRepeatState){0};
       input = 0;
     } else if (input & PAD_START) {
       int menuResult = uiMainMenuLoop(1);
@@ -1389,7 +1393,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         usleep(1000);
       prevInput = 0;
       frameCount = 0;
-      psbbnRepeat = (LunaNavRepeatState){0};
       input = 0;
     }
   }

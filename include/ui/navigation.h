@@ -9,9 +9,8 @@
 #define ORBS_LOGO_CACHE_COUNT 7
 #define ORBS_LOGO_CACHE_FOCUS 3
 #define PSBBN_ANIMATION_DURATION_MS 420
-#define PSBBN_REPEAT_INTERVAL_MS 180
-#define SCROLL_REPEAT_FRAMES_NTSC 11
-#define SCROLL_REPEAT_FRAMES_PAL 9
+#define PSBBN_REPEAT_FRAMES_NTSC 11
+#define PSBBN_REPEAT_FRAMES_PAL 9
 #define GRID_COLUMNS 4
 #define GRID_ROWS 4
 #define GRID_PAGE_SIZE (GRID_COLUMNS * GRID_ROWS)
@@ -106,6 +105,9 @@ int lunaNavCollectionForeground(const int *positions, const uint8_t *drawable,
 int lunaNavEase(int progress);
 int lunaNavAnimatedOffset(int startOffset, uint32_t startTime, uint32_t duration,
                           uint32_t now);
+uint32_t lunaNavDurationFrames(uint32_t durationMs, int framesPerSecond);
+int lunaNavClassicGlideFrameOffset(int startOffset, uint32_t elapsedFrames,
+                                   uint32_t durationFrames);
 int lunaNavRandomTarget(int total, int selectedIndex, uint32_t randomSeed);
 int lunaNavMarkedCount(const uint8_t *marked, int total);
 int lunaNavMarkedRank(const uint8_t *marked, int total, int index);
