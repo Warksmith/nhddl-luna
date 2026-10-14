@@ -2,6 +2,7 @@
 #include "ui/view_internal.h"
 #include "ui/language.h"
 #include "ui/case_page.h"
+#include <math.h>
 #include <stdio.h>
 
 static int pageBases[GRID_PAGE_BUFFERS];
@@ -149,6 +150,91 @@ static void caseQuad(CasePoint a, CasePoint b, CasePoint c, CasePoint d,
   inner = caseColor(inner);
   gsKit_prim_quad_gouraud(gsGlobal, a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y,
       z, outer, outer, inner, inner);
+}
+
+// Offset a clockwise screen-space contour, keeping the fringe one native
+// screen pixel wide regardless of case size, projection, or selection zoom.
+// A negative width feathers inward (the artwork-to-shell boundary).
+static void caseFringe(const CasePoint *p, const uint64_t *colors, int count,
+                        float width, int z) {
+  CasePoint offset[16];
+  for (int i = 0; i < count; i++) {
+    CasePoint prev = p[(i + count - 1) % count];
+    CasePoint next = p[(i + 1) % count];
+    float ax = p[i].x - prev.x, ay = p[i].y - prev.y;
+    float bx = next.x - p[i].x, by = next.y - p[i].y;
+    float aLength = sqrtf(ax * ax + ay * ay);
+    float bLength = sqrtf(bx * bx + by * by);
+    if (aLength < 0.001f || bLength < 0.001f)
+      return;
+    CasePoint a = {ay / aLength, -ax / aLength};
+    CasePoint b = {by / bLength, -bx / bLength};
+    float divisor = 1.0f + a.x * b.x + a.y * b.y;
+    if (divisor < 0.25f) divisor = 0.25f;
+    offset[i] = (CasePoint){p[i].x + width * (a.x + b.x) / divisor,
+                            p[i].y + width * (a.y + b.y) / divisor};
+  }
+  for (int i = 0; i < count; i++) {
+    int j = (i + 1) % count;
+    uint64_t clearI = colors[i] & ~((uint64_t)0xFF << 24);
+    uint64_t clearJ = colors[j] & ~((uint64_t)0xFF << 24);
+    gsKit_prim_quad_gouraud(gsGlobal,
+        p[i].x, p[i].y, p[j].x, p[j].y,
+        offset[i].x, offset[i].y, offset[j].x, offset[j].y, z,
+        caseColor(colors[i]), caseColor(colors[j]), clearI, clearJ);
+  }
+}
+
+static const uint8_t caseEdgeLight[8] = {79, 62, 33, 23, 19, 25, 48, 69};
+
+static int caseBorderLight(int edge, int jewel, int large) {
+  int light = caseEdgeLight[edge] + (jewel ? 65 : 0);
+  return large ? light : 22 + (light - 19) * 2 / 5;
+}
+
+// Only feather the combined shell silhouette, never its internal face seams.
+static void caseShellFringe(const CasePoint *front, const CasePoint *back,
+                             int jewel, int z) {
+  CasePoint points[16], hull[16];
+  uint64_t colors[16];
+  int left = 0;
+  for (int i = 0; i < 16; i++) {
+    points[i] = i < 8 ? front[i] : back[i - 8];
+    if (points[i].x < points[left].x ||
+        (points[i].x == points[left].x && points[i].y < points[left].y))
+      left = i;
+  }
+  int current = left, count = 0;
+  do {
+    hull[count] = points[current];
+    int light = current < 8 ? caseBorderLight(current, jewel, 0) : 10;
+    colors[count++] = GS_SETREG_RGBA(light, light + 1, light + 3, 0x80);
+    int next = (current + 1) % 16;
+    for (int i = 0; i < 16; i++) {
+      float ax = points[next].x - points[current].x;
+      float ay = points[next].y - points[current].y;
+      float bx = points[i].x - points[current].x;
+      float by = points[i].y - points[current].y;
+      float cross = ax * by - ay * bx;
+      if (cross < 0 || (cross == 0 && bx * bx + by * by > ax * ax + ay * ay))
+        next = i;
+    }
+    current = next;
+  } while (current != left && count < 16);
+  caseFringe(hull, colors, count, 1.0f, z);
+}
+
+static void caseArtworkFringe(const CaseGeometry *g, float x, float y,
+                               float width, float height, int z) {
+  CasePoint p[4] = {projectCase(g, x, y, 0),
+      projectCase(g, x + width, y, 0),
+      projectCase(g, x + width, y + height, 0),
+      projectCase(g, x, y + height, 0)};
+  uint64_t black = GS_SETREG_RGBA(0x12, 0x13, 0x16, 0x80);
+  uint64_t colors[4] = {black, black, black, black};
+  // Mask only the last pixel into the sleeve color; leave the texture and
+  // its existing sampling untouched, including the full-size preview.
+  caseFringe(p, colors, 4, -1.0f, z);
 }
 
 static void updateCaseFocus(int pageBase, int selectedSlot, uint32_t now) {
@@ -360,36 +446,43 @@ static void drawCase(float x, float y, float width, float height,
   float footSlope = (footRight.y - footLeft.y) / (footRight.x - footLeft.x);
   drawCaseContact(footLeft.x, (footLeft.y + footRight.y) * 0.5f,
       footRight.x - footLeft.x, height, footSlope, z - 1, selected);
+  if (!large)
+    caseShellFringe(front, back, jewel, z);
   caseFace(back, z, GS_SETREG_RGBA(0x0A, 0x0B, 0x0D, 0x80));
   for (int i = 0; i < 4; i++) {
     int j = i + 1;
     uint64_t lit = jewel ? GS_SETREG_RGBA(0xA0, 0xB0, 0xBC, 0x80) :
                       i < 2 ? GS_SETREG_RGBA(0x60, 0x63, 0x6A, 0x80) :
                             GS_SETREG_RGBA(0x32, 0x35, 0x3D, 0x80);
+    if (!large)
+      lit = jewel ? GS_SETREG_RGBA(0x60, 0x6A, 0x74, 0x80) :
+            i < 2 ? GS_SETREG_RGBA(0x3C, 0x40, 0x48, 0x80) :
+                    GS_SETREG_RGBA(0x28, 0x2C, 0x34, 0x80);
     caseQuad(front[i], front[j], back[i], back[j], z + 1,
         lit, GS_SETREG_RGBA(0x16, 0x18, 0x1E, 0x80));
   }
-  // Both closing seams follow the same 3D shell as the cover.
-  CasePoint seamTop = projectCase(&g, width, radius, g.depth * 0.54f);
-  CasePoint seamBottom = projectCase(&g, width, height - radius, g.depth * 0.54f);
-  CasePoint seamLeft = projectCase(&g, radius, 0, g.depth * 0.54f);
-  CasePoint seamRight = projectCase(&g, width - radius, 0, g.depth * 0.54f);
-  gsKit_prim_line(gsGlobal, seamTop.x, seamTop.y, seamBottom.x, seamBottom.y,
-      z + 2, caseColor(GS_SETREG_RGBA(5, 6, 8, 0x80)));
-  gsKit_prim_line(gsGlobal, seamLeft.x, seamLeft.y, seamRight.x, seamRight.y,
-      z + 2, caseColor(GS_SETREG_RGBA(0x14, 0x16, 0x1A, 0x80)));
-  CasePoint a = projectCase(&g, width, height * 0.44f, g.depth * 0.38f);
-  CasePoint b = projectCase(&g, width, height * 0.44f, g.depth * 0.80f);
-  CasePoint c = projectCase(&g, width, height * 0.56f, g.depth * 0.38f);
-  CasePoint d = projectCase(&g, width, height * 0.56f, g.depth * 0.80f);
-  caseQuad(a, b, c, d, z + 3, GS_SETREG_RGBA(6, 7, 9, 0x80),
-      GS_SETREG_RGBA(6, 7, 9, 0x80));
+  CasePoint a, b, c, d;
+  if (large) {
+    // Closing seams and the latch are useful only in the detailed preview.
+    CasePoint seamTop = projectCase(&g, width, radius, g.depth * 0.54f);
+    CasePoint seamBottom = projectCase(&g, width, height - radius, g.depth * 0.54f);
+    CasePoint seamLeft = projectCase(&g, radius, 0, g.depth * 0.54f);
+    CasePoint seamRight = projectCase(&g, width - radius, 0, g.depth * 0.54f);
+    gsKit_prim_line(gsGlobal, seamTop.x, seamTop.y, seamBottom.x, seamBottom.y,
+        z + 2, caseColor(GS_SETREG_RGBA(5, 6, 8, 0x80)));
+    gsKit_prim_line(gsGlobal, seamLeft.x, seamLeft.y, seamRight.x, seamRight.y,
+        z + 2, caseColor(GS_SETREG_RGBA(0x14, 0x16, 0x1A, 0x80)));
+    a = projectCase(&g, width, height * 0.44f, g.depth * 0.38f);
+    b = projectCase(&g, width, height * 0.44f, g.depth * 0.80f);
+    c = projectCase(&g, width, height * 0.56f, g.depth * 0.38f);
+    d = projectCase(&g, width, height * 0.56f, g.depth * 0.80f);
+    caseQuad(a, b, c, d, z + 3, GS_SETREG_RGBA(6, 7, 9, 0x80),
+        GS_SETREG_RGBA(6, 7, 9, 0x80));
+  }
   caseFace(front, z + 3, black);
-  static const uint8_t edgeLight[8] = {79, 62, 33, 23, 19, 25, 48, 69};
   for (int i = 0; i < 8; i++) {
     int j = (i + 1) & 7;
-    int light = edgeLight[i];
-    if (jewel) light += 65;
+    int light = caseBorderLight(i, jewel, large);
     caseQuad(front[i], front[j], inner[i], inner[j], z + 4,
         GS_SETREG_RGBA(light, light + 1, light + 3, 0x80), black);
   }
@@ -398,13 +491,14 @@ static void drawCase(float x, float y, float width, float height,
   float paperWidth = width * (jewel ? 0.90f : 130.0f / 135.0f);
   float paperHeight = height * (jewel ? 0.90f : 184.0f / 190.0f);
   if (jewel) {
-    // The dark hinged tray and rigid clear lid distinguish a jewel case.
-    for (int rib = 0; rib < 3; rib++) {
+    // One subdued hinge cue reads cleanly at thumbnail size.
+    for (int rib = 0; rib < (large ? 3 : 1); rib++) {
       float ribX = width * (0.025f + rib * 0.017f);
       a = projectCase(&g, ribX, height * 0.04f, 0);
       b = projectCase(&g, ribX, height * 0.96f, 0);
       gsKit_prim_line(gsGlobal, a.x, a.y, b.x, b.y, z + 5,
-          caseColor(GS_SETREG_RGBA(0x78, 0x84, 0x90, 0x60)));
+          caseColor(large ? GS_SETREG_RGBA(0x78, 0x84, 0x90, 0x60) :
+                           GS_SETREG_RGBA(0x54, 0x62, 0x70, 0x28)));
     }
   }
   if (cover != NULL) {
@@ -419,6 +513,9 @@ static void drawCase(float x, float y, float width, float height,
     }
     drawCaseTexture(&g, cover, paperX + (paperWidth - artWidth) * 0.5f,
         paperY + (paperHeight - artHeight) * 0.5f, artWidth, artHeight, z + 5);
+    if (!large)
+      caseArtworkFringe(&g, paperX + (paperWidth - artWidth) * 0.5f,
+          paperY + (paperHeight - artHeight) * 0.5f, artWidth, artHeight, z + 5);
   } else {
     a = projectCase(&g, paperX, paperY, 0);
     b = projectCase(&g, paperX + paperWidth, paperY, 0);
@@ -426,6 +523,8 @@ static void drawCase(float x, float y, float width, float height,
     d = projectCase(&g, paperX + paperWidth, paperY + paperHeight, 0);
     uint64_t empty = GS_SETREG_RGBA(0x22, 0x26, 0x32, 0x80);
     caseQuad(a, b, c, d, z + 5, empty, empty);
+    if (!large)
+      caseArtworkFringe(&g, paperX, paperY, paperWidth, paperHeight, z + 5);
     CasePoint center = projectCase(&g, width * 0.5f, height * 0.5f, 0);
     drawGlassDiamond(center.x, center.y, large ? 16 : 7,
         z + 6, caseColor(glassMissingCoverDiamondColor(0x60)));
@@ -435,18 +534,21 @@ static void drawCase(float x, float y, float width, float height,
   }
   if (cover != NULL)
     drawCaseShimmer(&g, z + 6, shimmerPhase, large);
-  a = projectCase(&g, paperX, paperY, 0);
-  b = projectCase(&g, paperX + paperWidth, paperY, 0);
-  c = projectCase(&g, paperX, paperY + height * 0.075f, 0);
-  d = projectCase(&g, paperX + paperWidth, paperY + height * 0.075f, 0);
-  caseQuad(a, b, c, d, z + 7, GS_SETREG_RGBA(0xD0, 0xDC, 0xE8, 7),
-      GS_SETREG_RGBA(0xD0, 0xDC, 0xE8, 0));
-  c = projectCase(&g, paperX, paperY + paperHeight, 0);
-  d = projectCase(&g, paperX + paperWidth, paperY + paperHeight, 0);
-  gsKit_prim_line(gsGlobal, a.x, a.y, c.x, c.y, z + 7,
-      caseColor(GS_SETREG_RGBA(0xB0, 0xBA, 0xC8, 0x0B)));
-  gsKit_prim_line(gsGlobal, b.x, b.y, d.x, d.y, z + 7,
-      caseColor(GS_SETREG_RGBA(0, 0, 0, 0x24)));
+  if (large) {
+    // Fine sleeve reflections belong to the full-size plastic treatment.
+    a = projectCase(&g, paperX, paperY, 0);
+    b = projectCase(&g, paperX + paperWidth, paperY, 0);
+    c = projectCase(&g, paperX, paperY + height * 0.075f, 0);
+    d = projectCase(&g, paperX + paperWidth, paperY + height * 0.075f, 0);
+    caseQuad(a, b, c, d, z + 7, GS_SETREG_RGBA(0xD0, 0xDC, 0xE8, 7),
+        GS_SETREG_RGBA(0xD0, 0xDC, 0xE8, 0));
+    c = projectCase(&g, paperX, paperY + paperHeight, 0);
+    d = projectCase(&g, paperX + paperWidth, paperY + paperHeight, 0);
+    gsKit_prim_line(gsGlobal, a.x, a.y, c.x, c.y, z + 7,
+        caseColor(GS_SETREG_RGBA(0xB0, 0xBA, 0xC8, 0x0B)));
+    gsKit_prim_line(gsGlobal, b.x, b.y, d.x, d.y, z + 7,
+        caseColor(GS_SETREG_RGBA(0, 0, 0, 0x24)));
+  }
   if (selected) {
     caseOutline(shadow, left - 2, top - 2, right - left + 4,
         bottom - top + 4, radius + 2);
