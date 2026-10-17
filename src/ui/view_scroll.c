@@ -1648,22 +1648,31 @@ static int drawScrollTexture(GSTEXTURE *texture, float x, float y,
 static void drawScrollCarouselCover(GSTEXTURE *cover, float x, float y,
                                      float width, float height, int resolved,
                                      int brightness, int opacity, int z) {
-  for (int spread = 4; spread >= 1; spread--)
-    gsKit_prim_sprite(gsGlobal, x + 5 - spread, y + 7 - spread,
-                      x + width + 5 + spread, y + height + 7 + spread, z,
-                      GS_SETREG_RGBA(0, 0, 0, 5 * opacity / 1000));
+  const int originalGlass = getGlassColorPreset() == GLASS_COLOR_ORIGINAL;
+  if (cover != NULL || originalGlass)
+    for (int spread = 4; spread >= 1; spread--)
+      gsKit_prim_sprite(gsGlobal, x + 5 - spread, y + 7 - spread,
+                        x + width + 5 + spread, y + height + 7 + spread, z,
+                        GS_SETREG_RGBA(0, 0, 0, 5 * opacity / 1000));
   if (cover != NULL) {
     drawScrollTexture(cover, x, y, width, height, brightness, z + 1,
                        0x80 * opacity / 1000);
   } else {
-    gsKit_prim_sprite(gsGlobal, x, y, x + width, y + height, z + 1,
-                      glassMissingCoverColor(0x60 * opacity / 1000));
+    // Match the clear missing-cover treatment used by the other library views.
+    if (originalGlass)
+      gsKit_prim_sprite(gsGlobal, x, y, x + width, y + height, z + 1,
+                        glassMissingCoverColor(0x60 * opacity / 1000));
     drawGlassDiamond((int)(x + width * 0.5f), (int)(y + height * 0.5f),
                       (int)(width * 0.11f), z + 2,
                       glassMissingCoverDiamondColor(0x60 * opacity / 1000));
+    const uint64_t textColor = originalGlass
+        ? glassLightColor(0xC8, 0xD4, 0xE8, 0x70)
+        : glassMissingCoverTextColor();
+    const uint64_t fadedTextColor = (textColor & ~((uint64_t)0xFF << 24)) |
+        ((uint64_t)(0x70 * opacity / 1000) << 24);
     drawTextWindow((int)x + 6, (int)(y + height * 0.5f) + 20,
                    (int)(x + width) - 6, 0, z + 2,
-                   glassLightColor(0xC8, 0xD4, 0xE8, 0x70 * opacity / 1000),
+                   fadedTextColor,
                    ALIGN_HCENTER, resolved ? lunaText("NO COVER") : lunaText("LOADING"));
   }
 }
