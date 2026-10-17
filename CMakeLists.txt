@@ -49,6 +49,8 @@ set(SOURCES
     # UI
     src/ui/gui.c
     src/ui/file_manager.c
+    src/ui/file_browser.c
+    src/ui/file_operations.c
     src/vmc_create.c
     src/ui/options_menu.c
     src/ui/game_options.c

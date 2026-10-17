@@ -1,5 +1,7 @@
 // Storage browser, VMC manager, and the library's Start menu.
 #include "ui/file_manager.h"
+#include "ui/file_browser.h"
+#include "ui/file_operations.h"
 #include "vmc_create.h"
 #include "devices/devices.h"
 #include "devices/init.h"
@@ -46,23 +48,6 @@ typedef struct {
   char path[PATH_MAX + 1];
   char label[64];
 } BrowserRoot;
-
-typedef struct {
-  char *name;
-  uint64_t size;
-  int isDirectory;
-  int hasSize;
-} BrowserEntry;
-
-typedef struct {
-  BrowserEntry *entries;
-  int root;
-  int rootSelected;
-  int count;
-  int selected;
-  int truncated;
-  char path[PATH_MAX + 1];
-} BrowserPane;
 
 typedef struct {
   char *path;
@@ -356,6 +341,7 @@ static int joinPath(char *destination, size_t capacity,
   return written >= 0 && (size_t)written < capacity;
 }
 
+// The PS1 VMC picker uses a bounded, synchronous listing.
 static int loadDirectory(const char *path, BrowserEntry *entries,
                          int *count, int *truncated) {
   DIR *directory = opendir(path);
@@ -398,15 +384,6 @@ static int loadDirectory(const char *path, BrowserEntry *entries,
   return 1;
 }
 
-static void parentPath(char *path, const char *root) {
-  size_t rootLength = strlen(root);
-  char *slash = strrchr(path + rootLength, '/');
-  if (slash == NULL || slash < path + rootLength)
-    path[rootLength] = '\0';
-  else
-    *slash = '\0';
-}
-
 static int queueFind(const CopyQueue *queue, const char *path) {
   for (int index = 0; index < queue->count; index++)
     if (!strcmp(queue->items[index].path, path))
@@ -430,6 +407,7 @@ static void queueClear(CopyQueue *queue) {
 
 static int pathWithin(const char *path, const char *folder) {
   size_t length = strlen(folder);
+  while (length > 0 && folder[length - 1] == '/') length--;
   return !strncmp(path, folder, length) &&
          (path[length] == '\0' || path[length] == '/');
 }
@@ -442,8 +420,8 @@ static int validFileName(const char *name) {
          strpbrk(name, "/\\:") == NULL;
 }
 
-static int editFileName(const char *title, char *name, size_t capacity,
-                        size_t maxLength) {
+static int editBrowserText(const char *title, char *name, size_t capacity,
+                           size_t maxLength, int allowEmpty) {
   static const char keys[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._- ";
   int selected = 0;
   int lowerCase = 0;
@@ -494,7 +472,7 @@ static int editFileName(const char *title, char *name, size_t capacity,
       return 0;
     if (input & PAD_START) {
       if (length <= maxLength && (validFileName(name) ||
-          (!name[0] && !strncmp(title, lunaText("UDPFS console IP"), 16))))
+          (!name[0] && allowEmpty)))
         return 1;
       snprintf(message, sizeof(message), lunaText("Enter a valid name (%u characters max)."),
                (unsigned)maxLength);
@@ -525,6 +503,12 @@ static int editFileName(const char *title, char *name, size_t capacity,
       selected = (selected + 10) % 40;
     }
   }
+}
+
+static int editFileName(const char *title, char *name, size_t capacity,
+                        size_t maxLength) {
+  return editBrowserText(title, name, capacity, maxLength,
+      !strcmp(title, lunaText("UDPFS console IP")));
 }
 
 static void formatBytes(uint64_t bytes, char *text, size_t size) {
@@ -567,11 +551,11 @@ static void showFileDetails(const BrowserRoot *roots, int rootCount,
   if (root < 0 || root >= rootCount)
     return;
   snprintf(path, sizeof(path), "%s", roots[root].path);
-  if (pane->root >= 0 && pane->count > 0) {
+  if (pane->root >= 0 && pane->visibleCount > 0) {
     if (!joinPath(path, sizeof(path), pane->path,
-                  pane->entries[pane->selected].name))
+                  browserPaneEntry(pane, pane->selected)->name))
       return;
-    kind = pane->entries[pane->selected].isDirectory ? lunaText("Folder") : lunaText("File");
+    kind = browserPaneEntry(pane, pane->selected)->isDirectory ? lunaText("Folder") : lunaText("File");
   } else if (pane->root >= 0) {
     snprintf(path, sizeof(path), "%s", pane->path);
     kind = lunaText("Folder");
@@ -637,10 +621,22 @@ enum FileAction {
   FILE_ACTION_RENAME,
   FILE_ACTION_NEW_FOLDER,
   FILE_ACTION_MOVE,
+  FILE_ACTION_COPY,
+  FILE_ACTION_DELETE,
+  FILE_ACTION_DELETE_MARKED,
+  FILE_ACTION_REFRESH,
+  FILE_ACTION_FILTER,
+  FILE_ACTION_CLEAR_FILTER,
+  FILE_ACTION_SORT_NAME,
+  FILE_ACTION_SORT_SIZE,
+  FILE_ACTION_SORT_DATE,
+  FILE_ACTION_MARK_ALL,
+  FILE_ACTION_INVERT,
+  FILE_ACTION_QUEUE,
 };
 
 typedef struct {
-  enum FileAction actions[4];
+  enum FileAction actions[20];
   int count;
 } FileActionMenu;
 
@@ -648,10 +644,13 @@ static int fileActionRow(int index, char *name, size_t nameSize,
                          char *detail, size_t detailSize,
                          CardArtType *cardArt, void *context) {
   const FileActionMenu *menu = context;
-  const char *label = menu->actions[index] == FILE_ACTION_DETAILS ? lunaText("Details") :
-                      menu->actions[index] == FILE_ACTION_RENAME ? lunaText("Rename") :
-                      menu->actions[index] == FILE_ACTION_NEW_FOLDER ? lunaText("New folder") :
-                      lunaText("Move marked items");
+  static const char *const labels[] = {
+      "Details", "Rename", "New folder", "Move marked items", "Copy marked items",
+      "Delete selected item", "Delete marked items", "Refresh folder", "Filter names",
+      "Clear filter", "Sort: name", "Sort: size (largest first)",
+      "Sort: date (newest first)", "Mark all listed items", "Invert listed marks",
+      "Review queue"};
+  const char *label = lunaText(labels[menu->actions[index]]);
   snprintf(name, nameSize, "%s", label);
   detail[0] = '\0';
   *cardArt = CARD_ART_NONE;
@@ -662,17 +661,34 @@ static int fileActionRow(int index, char *name, size_t nameSize,
 static int chooseFileAction(const BrowserPane *pane, const CopyQueue *queue) {
   FileActionMenu menu = {0};
   menu.actions[menu.count++] = FILE_ACTION_DETAILS;
-  if (pane->root >= 0 && pane->count > 0)
-    menu.actions[menu.count++] = FILE_ACTION_RENAME;
-  if (pane->root >= 0)
-    menu.actions[menu.count++] = FILE_ACTION_NEW_FOLDER;
-  if (queue->count > 0)
+  if (queue->count > 0) {
+    menu.actions[menu.count++] = FILE_ACTION_COPY;
     menu.actions[menu.count++] = FILE_ACTION_MOVE;
+    menu.actions[menu.count++] = FILE_ACTION_QUEUE;
+  }
+  if (pane->root >= 0 && pane->visibleCount > 0 && !pane->scanning) {
+    menu.actions[menu.count++] = FILE_ACTION_RENAME;
+    menu.actions[menu.count++] = FILE_ACTION_DELETE;
+    menu.actions[menu.count++] = FILE_ACTION_MARK_ALL;
+    menu.actions[menu.count++] = FILE_ACTION_INVERT;
+  }
+  if (pane->root >= 0 && !pane->scanning) {
+    menu.actions[menu.count++] = FILE_ACTION_NEW_FOLDER;
+    menu.actions[menu.count++] = FILE_ACTION_FILTER;
+    if (pane->filter[0]) menu.actions[menu.count++] = FILE_ACTION_CLEAR_FILTER;
+    menu.actions[menu.count++] = FILE_ACTION_SORT_NAME;
+    menu.actions[menu.count++] = FILE_ACTION_SORT_SIZE;
+    menu.actions[menu.count++] = FILE_ACTION_SORT_DATE;
+    menu.actions[menu.count++] = FILE_ACTION_REFRESH;
+  }
+  // Delete marked items is offered separately from deleting the highlighted row.
+  if (queue->count > 0)
+    menu.actions[menu.count++] = FILE_ACTION_DELETE_MARKED;
   int selected = 0;
   while (1) {
     drawBrowserFrame(lunaText("File Explorer"), lunaText("Actions"), lunaText("Choose an action."),
                      PROMPT_TWO(ICON_CROSS, lunaText("Select"), ICON_CIRCLE, lunaText("Back")),
-                     menu.count, selected, 0, 0, fileActionRow, &menu);
+                     menu.count, selected, browserFirstRow(selected), 0, fileActionRow, &menu);
     int input = waitForInput(-1);
     if (input & (PAD_CIRCLE | PAD_TRIANGLE))
       return -1;
@@ -686,31 +702,21 @@ static int chooseFileAction(const BrowserPane *pane, const CopyQueue *queue) {
 }
 
 static void selectPaneEntry(BrowserPane *pane, const char *name) {
-  if (!loadDirectory(pane->path, pane->entries, &pane->count,
-                     &pane->truncated)) {
-    clearEntries(pane->entries, pane->count);
+  if (!browserPaneRefresh(pane, name)) {
+    browserPaneDestroy(pane);
     pane->root = -1;
-    pane->count = 0;
     pane->selected = 0;
-    return;
   }
-  pane->selected = 0;
-  if (name != NULL)
-    for (int index = 0; index < pane->count; index++)
-      if (!strcmp(pane->entries[index].name, name)) {
-        pane->selected = index;
-        break;
-      }
 }
 
 static void renamePaneEntry(BrowserPane *pane, const BrowserRoot *roots,
                             CopyQueue *queue,
                             char *status, size_t statusSize) {
-  if (pane->root < 0 || pane->count == 0)
+  if (pane->root < 0 || pane->visibleCount == 0)
     return;
   char source[PATH_MAX + 1], destination[PATH_MAX + 1];
   char name[PATH_MAX + 1];
-  const char *oldName = pane->entries[pane->selected].name;
+  const char *oldName = browserPaneEntry(pane, pane->selected)->name;
   if (!joinPath(source, sizeof(source), pane->path, oldName)) {
     snprintf(status, statusSize, lunaText("The current path is too long."));
     return;
@@ -886,7 +892,7 @@ static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
     int compact = paneRight - paneLeft < 180;
     int x1 = paneLeft + (compact ? 8 : 10);
     int x2 = paneRight - (compact ? 8 : 10);
-    int total = pane->root < 0 ? rootCount : pane->count;
+    int total = pane->root < 0 ? rootCount : pane->visibleCount;
     int selected = pane->root < 0 ? pane->rootSelected : pane->selected;
     int first = visible > 0 ? selected / visible * visible : 0;
     drawFileManagerPane(paneLeft, 51, paneRight, listBottom + 2,
@@ -912,9 +918,19 @@ static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
     drawTextWindow(x1, 54, x2, 54 + lineHeight, 0,
                    side == active ? ColorSelectedText : HeaderTextColor,
                    ALIGN_LEFT, heading);
+    char location[PATH_MAX + 100];
+    if (pane->root < 0)
+      snprintf(location, sizeof(location), "%s", lunaText("DRIVES"));
+    else if (pane->scanning)
+      snprintf(location, sizeof(location), lunaText("Reading folder... %d items"), pane->count);
+    else if (pane->filter[0])
+      snprintf(location, sizeof(location), "%d/%d  [%s]", total, pane->count, pane->filter);
+    else
+      snprintf(location, sizeof(location), "%d/%d  %s", total ? selected + 1 : 0,
+               total, compact ? lunaText("FOLDER") : pane->path);
     drawTextWindow(x1, 79, x2, 79 + lineHeight, 0,
                    glassPresetColor(0x86, 0xA9, 0xBC, 0x60), ALIGN_LEFT,
-                   pane->root < 0 ? lunaText("DRIVES") : compact ? lunaText("FOLDER") : pane->path);
+                   location);
     for (int index = first; index < total && index < first + visible; index++) {
       char name[PATH_MAX + 16];
       char detail[32] = "";
@@ -932,7 +948,7 @@ static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
         snprintf(name, sizeof(name), "%s", label);
         snprintf(detail, sizeof(detail), "%s", roots[index].path);
       } else {
-        const BrowserEntry *entry = &pane->entries[index];
+        const BrowserEntry *entry = browserPaneEntry(pane, index);
         isDirectory = entry->isDirectory;
         char path[PATH_MAX + 1];
         int marked = joinPath(path, sizeof(path), pane->path, entry->name) &&
@@ -982,9 +998,14 @@ static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
                         left + 8 + filled, listBottom - 4, 4,
                         glassPresetColor(0x50, 0x90, 0xB0, 0x80));
   }
+  const BrowserPane *activePane = &panes[active];
+  const char *message = status;
+  if (progressPercent < 0 && footer.count == 0 && activePane->root >= 0 && activePane->truncated)
+    message = activePane->truncated == 1 ? lunaText("Listing limited by memory; some items are hidden.") :
+        lunaText("Folder read failed; listing is incomplete.");
   drawTextWindow(left + 8, listBottom, right - 8,
                  gsGlobal->Height - footerHeight, 0, HeaderTextColor,
-                 ALIGN_LEFT, status);
+                 ALIGN_LEFT, message);
   drawFileManagerFooter(left, right, footer);
   presentBrowserFrame();
 }
@@ -1428,7 +1449,6 @@ static void runCopyQueue(const BrowserRoot *roots, int rootCount,
     return;
   }
   BrowserPane *destinationPane = &panes[1 - queue->sourceSide];
-  int sourceSide = queue->sourceSide;
   if (destinationPane->root < 0) {
     snprintf(status, statusSize, lunaText("Open a destination folder in the other pane."));
     return;
@@ -1581,42 +1601,200 @@ static void runCopyQueue(const BrowserRoot *roots, int rootCount,
              move ? lunaText("Moved") : lunaText("Copied"), completed,
              (unsigned long long)(progress.bytes / 1048576), progress.files);
   if (completed > 0) {
-    loadDirectory(destinationPane->path, destinationPane->entries,
-                  &destinationPane->count, &destinationPane->truncated);
-    if (move)
-      selectPaneEntry(&panes[sourceSide], NULL);
+    for (int side = 0; side < 2; side++)
+      if (panes[side].root >= 0) selectPaneEntry(&panes[side], NULL);
   }
+}
+
+static int queueRow(int index, char *name, size_t nameSize,
+                    char *detail, size_t detailSize, CardArtType *cardArt,
+                    void *context) {
+  const CopyQueue *queue = context;
+  const char *path = queue->items[index].path;
+  const char *base = strrchr(path, '/');
+  snprintf(name, nameSize, "%s%s", base ? base + 1 : path,
+           queue->items[index].isDirectory ? "/" : "");
+  snprintf(detail, detailSize, "%s", path);
+  *cardArt = CARD_ART_NONE;
+  return 1;
+}
+
+static void reviewQueue(CopyQueue *queue) {
+  int selected = 0;
+  while (queue->count > 0) {
+    char status[96];
+    snprintf(status, sizeof(status), lunaText("%d items queued. Square removes the highlighted mark."), queue->count);
+    drawBrowserFrame(lunaText("Review queue"), queue->items[selected].path,
+        status, PROMPT_TWO(ICON_SQUARE, lunaText("Unmark"), ICON_CIRCLE, lunaText("Back")),
+        queue->count, selected, browserFirstRow(selected), 0, queueRow, queue);
+    int input = waitForInput(-1);
+    if (input & (PAD_CIRCLE | PAD_TRIANGLE)) return;
+    if (input & PAD_UP) selected = (selected + queue->count - 1) % queue->count;
+    else if (input & PAD_DOWN) selected = (selected + 1) % queue->count;
+    else if (input & PAD_SQUARE) {
+      queueRemove(queue, selected);
+      if (selected >= queue->count) selected = queue->count - 1;
+    }
+  }
+}
+
+// Returns 1 on success, 0 for an overlapping mark, -1 for capacity/allocation.
+static int markEntry(const BrowserPane *pane, CopyQueue *queue, int active,
+                      int index, int toggle) {
+  BrowserEntry *entry = browserPaneEntry(pane, index);
+  char path[PATH_MAX + 1];
+  if (!entry || !joinPath(path, sizeof(path), pane->path, entry->name)) return -1;
+  int marked = queueFind(queue, path);
+  if (marked >= 0) {
+    if (toggle) queueRemove(queue, marked);
+    return 1;
+  }
+  for (int i = 0; i < queue->count; i++)
+    if (pathWithin(path, queue->items[i].path) || pathWithin(queue->items[i].path, path)) return 0;
+  if (queue->count >= COPY_MAX_QUEUE) return -1;
+  char *copy = strdup(path);
+  if (!copy) return -1;
+  queue->items[queue->count++] = (CopyItem){copy, entry->isDirectory, 0};
+  queue->sourceSide = active;
+  return 1;
+}
+
+static void markListed(const BrowserPane *pane, CopyQueue *queue, int active,
+                        int invert, char *status, size_t statusSize) {
+  if (queue->count && queue->sourceSide != active) {
+    snprintf(status, statusSize, "%s", lunaText("Mark on the source side or clear the queue with Select."));
+    return;
+  }
+  CopyQueue trial = {0};
+  trial.sourceSide = queue->sourceSide;
+  for (int i = 0; i < queue->count; i++) {
+    trial.items[i] = queue->items[i];
+    trial.items[i].path = strdup(queue->items[i].path);
+    if (!trial.items[i].path) goto full;
+    trial.count++;
+  }
+  for (int i = 0; i < pane->visibleCount; i++) {
+    char path[PATH_MAX + 1];
+    if (!joinPath(path, sizeof(path), pane->path, browserPaneEntry(pane, i)->name)) goto full;
+    int marked = queueFind(queue, path);
+    if (invert && marked >= 0) queueRemove(&trial, queueFind(&trial, path));
+  }
+  for (int i = 0; i < pane->visibleCount; i++) {
+    char path[PATH_MAX + 1];
+    if (!joinPath(path, sizeof(path), pane->path, browserPaneEntry(pane, i)->name)) goto full;
+    if (invert && queueFind(queue, path) >= 0) continue;
+    if (markEntry(pane, &trial, active, i, 0) < 0) goto full;
+  }
+  queueClear(queue);
+  *queue = trial;
+  snprintf(status, statusSize, lunaText("%d items queued."), queue->count);
+  return;
+full:
+  queueClear(&trial);
+  snprintf(status, statusSize, "%s", lunaText("Selection exceeds queue or memory limits. Existing marks kept."));
+}
+
+static int deleteProgress(const char *path, void *context) {
+  CopyProgress *progress = context;
+  if (copyCancelled(progress)) return 1;
+  uint32_t now = uiNowMs();
+  if (now - progress->lastDrawMs >= 100) {
+    const char *base = strrchr(path, '/');
+    char status[160];
+    snprintf(status, sizeof(status), lunaText("Deleting %d/%d: %s"),
+        progress->itemIndex, progress->itemCount, base ? base + 1 : path);
+    drawFileManagerFrame(progress->roots, progress->rootCount, progress->panes,
+        progress->queue, progress->active, progress->expandedPane, status,
+        PROMPT_ONE(ICON_CIRCLE, lunaText("Stop deletion")), -1);
+    progress->lastDrawMs = now;
+  }
+  return 0;
+}
+
+static void deleteItems(const BrowserRoot *roots, int rootCount,
+                        BrowserPane *panes, CopyQueue *queue, int active,
+                        int expandedPane, int marked, char *status, size_t statusSize) {
+  CopyQueue single = {0};
+  CopyQueue *items = marked ? queue : &single;
+  if (!marked) {
+    if (panes[active].root < 0 || !panes[active].visibleCount ||
+        markEntry(&panes[active], &single, active, panes[active].selected, 0) != 1) return;
+  }
+  if (!items->count) return;
+  int selected = 0, confirmed = 0;
+  while (1) {
+    snprintf(status, statusSize, lunaText("Permanently delete %d items? This cannot be undone."), items->count);
+    drawBrowserFrame(lunaText("Delete items"), items->items[selected].path, status,
+        PROMPT_TWO(ICON_CROSS, lunaText("Delete permanently"), ICON_CIRCLE, lunaText("Cancel")),
+        items->count, selected, browserFirstRow(selected), 0, queueRow, items);
+    int input = waitForInput(-1);
+    if (input & (PAD_CIRCLE | PAD_TRIANGLE)) break;
+    if (input & PAD_UP) selected = (selected + items->count - 1) % items->count;
+    else if (input & PAD_DOWN) selected = (selected + 1) % items->count;
+    else if (input & PAD_CROSS) { confirmed = 1; break; }
+  }
+  if (!confirmed) {
+    snprintf(status, statusSize, "%s", lunaText("Deletion cancelled. Nothing removed."));
+    queueClear(&single);
+    return;
+  }
+  // Close directory enumerators before changing either pane's contents.
+  for (int side = 0; side < 2; side++) browserPaneStop(&panes[side]);
+  CopyProgress progress = {0};
+  progress.roots = roots; progress.rootCount = rootCount;
+  progress.panes = panes; progress.queue = queue;
+  progress.active = active; progress.expandedPane = expandedPane;
+  progress.itemCount = items->count;
+  int completed = 0, result = 0;
+  while (items->count > 0) {
+    const char *path = items->items[0].path;
+    const char *root = NULL;
+    for (int i = 0; i < rootCount; i++)
+      if (pathWithin(path, roots[i].path)) { root = roots[i].path; break; }
+    progress.itemIndex = completed + 1;
+    result = root ? browserDeleteTree(path, root, deleteProgress, &progress) : -1;
+    if (result) break;
+    // Deleting one row also invalidates queued parents or descendants of it.
+    if (!marked) for (int i = 0; i < queue->count;)
+      if (pathWithin(queue->items[i].path, path) || pathWithin(path, queue->items[i].path))
+        queueRemove(queue, i);
+      else i++;
+    queueRemove(items, 0);
+    completed++;
+  }
+  if (result)
+    snprintf(status, statusSize, lunaText("Deleted %d items; stopped. Some contents may already be removed."), completed);
+  else
+    snprintf(status, statusSize, lunaText("Deleted %d items."), completed);
+  for (int side = 0; side < 2; side++)
+    if (panes[side].root >= 0) selectPaneEntry(&panes[side], NULL);
+  queueClear(&single);
 }
 
 static void uiFileManagerLoop(void) {
   BrowserRoot *roots = calloc(BROWSER_MAX_ROOTS, sizeof(*roots));
   BrowserPane *panes = calloc(2, sizeof(*panes));
-  if (roots == NULL || panes == NULL) {
-    free(roots);
-    free(panes);
-    return;
-  }
-  for (int side = 0; side < 2; side++) {
-    panes[side].entries = calloc(BROWSER_MAX_ENTRIES, sizeof(BrowserEntry));
-    panes[side].root = -1;
-  }
-  if (panes[0].entries == NULL || panes[1].entries == NULL)
-    goto done;
+  if (!roots || !panes) { free(roots); free(panes); return; }
+  for (int side = 0; side < 2; side++) panes[side].root = -1;
   int rootCount = collectRoots(roots);
   CopyQueue queue = {0};
   queue.sourceSide = -1;
-  int active = 0;
-  int expandedPane = -1;
+  int active = 0, expandedPane = -1;
+  int previousHeld = pollInput();
   char status[160];
-  snprintf(status, sizeof(status), "%s", lunaText("Open a source and destination drive to copy files."));
+  snprintf(status, sizeof(status), "%s", lunaText("Hold L2 + Up/Down to change pages."));
   while (1) {
     BrowserPane *pane = &panes[active];
+    for (int side = 0; side < 2; side++)
+      if (panes[side].root >= 0) browserPaneStep(&panes[side]);
+    if (!strcmp(status, lunaText("Loading details for sorting; folders first.")) &&
+        !pane->scanning && pane->metadataNext > pane->count) status[0] = '\0';
     drawFileManagerFrame(roots, rootCount, panes, &queue, active,
-                         expandedPane, status,
-                         (PromptBar){0}, -1);
-    int input = readInput();
-    if (input & PAD_CIRCLE)
-      break;
+                         expandedPane, status, (PromptBar){0}, -1);
+    int held = pollInput();
+    int input = held & ~previousHeld;
+    previousHeld = held;
+    if (input & PAD_CIRCLE) break;
     if (input & (PAD_L1 | PAD_R1 | PAD_LEFT | PAD_RIGHT)) {
       int side = (input & (PAD_L1 | PAD_LEFT)) ? 0 : 1;
       expandedPane = expandedPane == side ? -1 : side;
@@ -1631,128 +1809,99 @@ static void uiFileManagerLoop(void) {
         renamePaneEntry(pane, roots, &queue, status, sizeof(status));
       else if (action == FILE_ACTION_NEW_FOLDER)
         createPaneFolder(pane, roots, status, sizeof(status));
-      else if (action == FILE_ACTION_MOVE)
+      else if (action == FILE_ACTION_MOVE || action == FILE_ACTION_COPY)
         runCopyQueue(roots, rootCount, panes, &queue, active,
-                     expandedPane, 1, status, sizeof(status));
+                     expandedPane, action == FILE_ACTION_MOVE, status, sizeof(status));
+      else if (action == FILE_ACTION_QUEUE) reviewQueue(&queue);
+      else if (action == FILE_ACTION_DELETE || action == FILE_ACTION_DELETE_MARKED)
+        deleteItems(roots, rootCount, panes, &queue, active, expandedPane,
+                    action == FILE_ACTION_DELETE_MARKED, status, sizeof(status));
+      else if (action == FILE_ACTION_REFRESH) {
+        if (!browserPaneRefresh(pane, NULL))
+          snprintf(status, sizeof(status), "%s", lunaText("Could not open this folder."));
+      } else if (action == FILE_ACTION_FILTER) {
+        char filter[BROWSER_FILTER_MAX + 1];
+        snprintf(filter, sizeof(filter), "%s", pane->filter);
+        if (editBrowserText(lunaText("Filter names"), filter, sizeof(filter), BROWSER_FILTER_MAX, 1)) {
+          browserPaneFilter(pane, filter);
+          status[0] = '\0';
+        }
+      } else if (action == FILE_ACTION_CLEAR_FILTER) browserPaneFilter(pane, "");
+      else if (action >= FILE_ACTION_SORT_NAME && action <= FILE_ACTION_SORT_DATE) {
+        browserPaneSort(pane, (BrowserSort)(action - FILE_ACTION_SORT_NAME));
+        snprintf(status, sizeof(status), "%s", action == FILE_ACTION_SORT_NAME ?
+            lunaText("Sorted by name; folders first.") :
+            lunaText("Loading details for sorting; folders first."));
+      } else if (action == FILE_ACTION_MARK_ALL || action == FILE_ACTION_INVERT)
+        markListed(pane, &queue, active, action == FILE_ACTION_INVERT, status, sizeof(status));
+      previousHeld = pollInput();
       continue;
     }
     if (input & PAD_TRIANGLE) {
       if (pane->root >= 0) {
         if (!strcmp(pane->path, roots[pane->root].path)) {
+          browserPaneDestroy(pane);
           pane->root = -1;
-        } else {
-          parentPath(pane->path, roots[pane->root].path);
-          if (!loadDirectory(pane->path, pane->entries, &pane->count,
-                             &pane->truncated))
-            pane->root = -1;
-        }
-        pane->selected = 0;
+        } else if (!browserPaneUp(pane, roots[pane->root].path))
+          snprintf(status, sizeof(status), "%s", lunaText("Could not open this folder."));
       }
     } else if (input & (PAD_UP | PAD_DOWN)) {
-      int total = pane->root < 0 ? rootCount : pane->count;
+      int total = pane->root < 0 ? rootCount : pane->visibleCount;
       int *focus = pane->root < 0 ? &pane->rootSelected : &pane->selected;
-      if (total > 0)
-        *focus = (*focus + (input & PAD_UP ? total - 1 : 1)) % total;
+      if (total > 0) {
+        if (held & PAD_L2) {
+          *focus += (input & PAD_UP ? -1 : 1) * browserVisibleRows();
+          if (*focus < 0) *focus = 0;
+          if (*focus >= total) *focus = total - 1;
+        } else *focus = (*focus + (input & PAD_UP ? total - 1 : 1)) % total;
+      }
+      pane->restoreName[0] = '\0';
     } else if (input & PAD_CROSS) {
       if (pane->root < 0 && rootCount > 0) {
         int root = pane->rootSelected;
-        if (loadDirectory(roots[root].path, pane->entries, &pane->count,
-                          &pane->truncated)) {
+        if (browserPaneOpen(pane, roots[root].path)) {
           pane->root = root;
-          snprintf(pane->path, sizeof(pane->path), "%s", roots[root].path);
-          pane->selected = 0;
           status[0] = '\0';
-        } else {
-          snprintf(status, sizeof(status), lunaText("Could not open this device."));
-        }
-      } else if (pane->root >= 0 && pane->count > 0 &&
-                 pane->entries[pane->selected].isDirectory) {
-        char child[PATH_MAX + 1];
-        if (!joinPath(child, sizeof(child), pane->path,
-                      pane->entries[pane->selected].name)) {
-          snprintf(status, sizeof(status), lunaText("Folder path is too long."));
-        } else if (!loadDirectory(child, pane->entries, &pane->count,
-                                  &pane->truncated)) {
-          snprintf(status, sizeof(status), lunaText("Could not open this folder."));
-        } else {
-          snprintf(pane->path, sizeof(pane->path), "%s", child);
-          pane->selected = 0;
-          status[0] = '\0';
+        } else snprintf(status, sizeof(status), "%s", lunaText("Could not open this device."));
+      } else {
+        BrowserEntry *entry = browserPaneEntry(pane, pane->selected);
+        if (entry && entry->isDirectory) {
+          if (!browserPaneEnter(pane, entry->name))
+            snprintf(status, sizeof(status), "%s", lunaText("Could not open this folder."));
+          else status[0] = '\0';
         }
       }
     } else if (input & PAD_SQUARE) {
-      char path[PATH_MAX + 1];
-      if (pane->root < 0 || pane->count == 0) {
-        snprintf(status, sizeof(status), lunaText("Open a folder and select an item to mark."));
-        continue;
+      if (pane->root < 0 || !pane->visibleCount) {
+        snprintf(status, sizeof(status), "%s", lunaText("Open a folder and select an item to mark."));
+      } else if (queue.count && queue.sourceSide != active) {
+        snprintf(status, sizeof(status), "%s", lunaText("Mark on the source side or clear the queue with Select."));
+      } else {
+        int result = markEntry(pane, &queue, active, pane->selected, 1);
+        if (result == 1) snprintf(status, sizeof(status), lunaText("%d items queued."), queue.count);
+        else snprintf(status, sizeof(status), "%s", result == 0 ?
+            lunaText("A parent or child is already marked.") :
+            lunaText("Selection exceeds queue or memory limits. Existing marks kept."));
       }
-      if (queue.count > 0 && queue.sourceSide != active) {
-        snprintf(status, sizeof(status), lunaText("Mark on the source side or clear the queue with Select."));
-        continue;
-      }
-      if (!joinPath(path, sizeof(path), pane->path,
-                    pane->entries[pane->selected].name)) {
-        snprintf(status, sizeof(status), lunaText("Item path is too long."));
-        continue;
-      }
-      int marked = queueFind(&queue, path);
-      if (marked >= 0) {
-        queueRemove(&queue, marked);
-        snprintf(status, sizeof(status), lunaText("%d items queued."), queue.count);
-        continue;
-      }
-      if (queue.count >= COPY_MAX_QUEUE) {
-        snprintf(status, sizeof(status), lunaText("Queue is full (128 items)."));
-        continue;
-      }
-      int overlaps = 0;
-      for (int index = 0; index < queue.count; index++)
-        if (pathWithin(path, queue.items[index].path) ||
-            pathWithin(queue.items[index].path, path))
-          overlaps = 1;
-      if (overlaps) {
-        snprintf(status, sizeof(status), lunaText("A parent or child is already marked."));
-        continue;
-      }
-      queue.items[queue.count].path = strdup(path);
-      if (queue.items[queue.count].path == NULL) {
-        snprintf(status, sizeof(status), lunaText("Not enough memory to mark this item."));
-        continue;
-      }
-      queue.items[queue.count].isDirectory =
-          pane->entries[pane->selected].isDirectory;
-      queue.items[queue.count].measuredBytes = 0;
-      queue.count++;
-      queue.sourceSide = active;
-      snprintf(status, sizeof(status), lunaText("%d items queued. Open the destination, then Start."),
-               queue.count);
     } else if (input & PAD_SELECT) {
-      if (queue.count == 0)
-        continue;
+      if (!queue.count) continue;
       snprintf(status, sizeof(status), lunaText("Clear all %d marked items?"), queue.count);
       drawFileManagerFrame(roots, rootCount, panes, &queue, active,
-                           expandedPane, status,
-                           PROMPT_TWO(ICON_CROSS, lunaText("Clear queue"),
-                                      ICON_CIRCLE, lunaText("Keep queue")), -1);
+          expandedPane, status, PROMPT_TWO(ICON_CROSS, lunaText("Clear queue"),
+          ICON_CIRCLE, lunaText("Keep queue")), -1);
       if (waitForInput(PAD_CROSS | PAD_CIRCLE | PAD_TRIANGLE) & PAD_CROSS) {
         queueClear(&queue);
-        snprintf(status, sizeof(status), lunaText("Queue cleared."));
-      } else {
-        snprintf(status, sizeof(status), lunaText("Queue kept."));
-      }
+        snprintf(status, sizeof(status), "%s", lunaText("Queue cleared."));
+      } else snprintf(status, sizeof(status), "%s", lunaText("Queue kept."));
+      previousHeld = pollInput();
     } else if (input & PAD_START) {
       runCopyQueue(roots, rootCount, panes, &queue, active, expandedPane,
                    0, status, sizeof(status));
+      previousHeld = pollInput();
     }
   }
   queueClear(&queue);
-done:
-  for (int side = 0; side < 2; side++) {
-    if (panes[side].entries != NULL) {
-      clearEntries(panes[side].entries, panes[side].count);
-      free(panes[side].entries);
-    }
-  }
+  for (int side = 0; side < 2; side++) browserPaneDestroy(&panes[side]);
   free(panes);
   free(roots);
 }
