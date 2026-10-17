@@ -265,6 +265,8 @@ int uiInit() {
   resetNeoBackground();
   resetAnimatedWallpapers();
   gsGlobal = gsKit_init_global();
+  if (gsGlobal == NULL)
+    return -1;
   initVMode(gsGlobal);
   gsGlobal->PSM = GS_PSM_CT24; // Set color depth to avoid PAL VRAM issues
   gsGlobal->PSMZ = GS_PSMZ_16S;
@@ -281,6 +283,8 @@ int uiInit() {
   int res;
   if ((res = dmaKit_chan_init(DMA_CHANNEL_GIF))) {
     DPRINTF("ERROR: Failed to initlize DMAC: %d\n", res);
+    gsKit_deinit_global(gsGlobal);
+    gsGlobal = NULL;
     return res;
   }
 
@@ -291,6 +295,7 @@ int uiInit() {
   initSystemConfigCapture();
   if (reserveUIFontVRAM()) {
     DPRINTF("ERROR: Failed to reserve font VRAM\n");
+    closeUI();
     return -1;
   }
   gsKit_TexManager_init(gsGlobal);
@@ -304,13 +309,16 @@ int uiInit() {
   // Initialize resources
   if (initGraphics()) {
     DPRINTF("ERROR: Failed to initialize font\n");
+    closeUI();
     return -1;
   };
 
   // Init cover geometry and artwork caches.
   calculateCoverArtGeometry();
-  if (artCacheInit())
+  if (artCacheInit()) {
+    closeUI();
     return -1;
+  }
 
   return 0;
 }
@@ -318,26 +326,30 @@ int uiInit() {
 // Invalidates currently loaded texture and loads a new one
 // Frees textures and deinits gsKit
 void closeUI() {
-  gsKit_vram_clear(gsGlobal);
+  if (gsGlobal == NULL)
+    return;
+  gsKit_queue_exec(gsGlobal);
+  gsKit_finish();
+  dmaKit_wait_fast();
   artCacheShutdown();
   closeFont();
+  gsKit_vram_clear(gsGlobal);
   gsKit_deinit_global(gsGlobal);
   gsGlobal = NULL;
 }
 
 // Main UI loop. Displays the target list.
 int uiLoop(TargetList *titles, int preparedCollectionIdx) {
-  // Reinitialize UI if video mode doesn't match
-  if ((LAUNCHER_OPTIONS.vmode != VMODE_NONE) && (gsGlobal->Mode != LAUNCHER_OPTIONS.vmode)) {
-    uiInit();
-  }
-
   int res = 0;
   uint8_t *favoriteFlags = NULL;
   uint8_t *allFavoriteFlags = NULL;
   TargetList *allTitles = titles;
   TargetList *favoriteTitles = NULL;
   TargetList *platformTitles = NULL;
+  // Reinitialize UI if video mode doesn't match. A failed rebuild owns no GS.
+  if (gsGlobal != NULL && LAUNCHER_OPTIONS.vmode != VMODE_NONE &&
+      gsGlobal->Mode != LAUNCHER_OPTIONS.vmode && (res = uiInit()))
+    goto exit;
   if ((gsGlobal == NULL) && (res = uiInit())) {
     DPRINTF("ERROR: Failed to init UI: %d\n", res);
     goto exit;

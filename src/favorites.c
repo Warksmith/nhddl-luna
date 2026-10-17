@@ -13,6 +13,7 @@
 
 static const char favoritesPath[] = "/favorites.txt";
 static const char favoritesTempPath[] = "/favorites.txt.tmp";
+static const char favoritesComplete[] = "# LUNA_FAVORITES_COMPLETE\n";
 
 static struct DeviceMapEntry *favoriteDevice(Target *target) {
   return target->device->metadev ? target->device->metadev : target->device;
@@ -33,6 +34,46 @@ static int deviceWasVisited(TargetList *titles, Target *stop, struct DeviceMapEn
   return 0;
 }
 
+// Only a complete staged record may override the primary file. A save interrupted
+// while writing its list must not hide the previous selection with a valid prefix.
+static int readFavoriteFile(const char *path, int staged, TargetList *titles,
+                             struct DeviceMapEntry *device, uint8_t *flags,
+                             size_t flagCount) {
+  FILE *file = fopen(path, "r");
+  if (!file)
+    return errno == ENOENT ? -ENOENT : -EIO;
+  char favorite[PATH_MAX + 2];
+  int complete = 0, result = 0;
+  while (fgets(favorite, sizeof(favorite), file)) {
+    if (!strcmp(favorite, favoritesComplete)) {
+      complete = 1;
+      if (fgetc(file) != EOF)
+        result = -EINVAL;
+      break;
+    }
+    size_t length = strcspn(favorite, "\r\n");
+    if (length == sizeof(favorite) - 1 ||
+        (!strchr(favorite, '\n') && !feof(file))) {
+      result = -EINVAL;
+      break;
+    }
+    favorite[length] = '\0';
+    if (!length || !titles || !flags)
+      continue;
+    for (Target *target = titles->first; target; target = target->next)
+      if (target->idx < flagCount && favoriteDevice(target) == device &&
+          !strcmp(favorite, relativeTargetPath(target)))
+        flags[target->idx] = 1;
+  }
+  if (ferror(file))
+    result = -EIO;
+  if (fclose(file))
+    result = -EIO;
+  if (!result && staged && !complete)
+    result = -EINVAL;
+  return result;
+}
+
 int loadFavoriteFlags(TargetList *titles, uint8_t *flags, size_t flagCount) {
   Target *deviceTarget;
   int loaded = 0;
@@ -40,36 +81,27 @@ int loadFavoriteFlags(TargetList *titles, uint8_t *flags, size_t flagCount) {
   if (titles == NULL || flags == NULL || flagCount < (size_t)titles->total)
     return -EINVAL;
   memset(flags, 0, flagCount);
+  uint8_t *candidate = calloc(flagCount ? flagCount : 1, 1);
+  if (!candidate)
+    return -ENOMEM;
 
   for (deviceTarget = titles->first; deviceTarget != NULL; deviceTarget = deviceTarget->next) {
     struct DeviceMapEntry *device = favoriteDevice(deviceTarget);
     char path[PATH_MAX];
-    char favorite[PATH_MAX + 2];
-    FILE *file;
-
-    if (deviceWasVisited(titles, deviceTarget, device) ||
-        buildConfigFilePath(path, sizeof(path), device->mountpoint, favoritesPath))
+    if (deviceWasVisited(titles, deviceTarget, device))
       continue;
-    file = fopen(path, "r");
-    if (file == NULL)
-      continue;
-
-    while (fgets(favorite, sizeof(favorite), file) != NULL) {
-      Target *target;
-      size_t length = strcspn(favorite, "\r\n");
-      favorite[length] = '\0';
-      if (length == 0)
+    const char *paths[] = {favoritesTempPath, favoritesPath};
+    for (int attempt = 0; attempt < 2; attempt++) {
+      memset(candidate, 0, flagCount);
+      if (buildConfigFilePath(path, sizeof(path), device->mountpoint, paths[attempt]) ||
+          readFavoriteFile(path, attempt == 0, titles, device, candidate, flagCount))
         continue;
-      for (target = titles->first; target != NULL; target = target->next) {
-        if (target->idx < flagCount && favoriteDevice(target) == device &&
-            !strcmp(favorite, relativeTargetPath(target))) {
-          flags[target->idx] = 1;
-          loaded++;
-        }
-      }
+      for (size_t i = 0; i < flagCount; i++)
+        if (candidate[i] && !flags[i]) { flags[i] = 1; loaded++; }
+      break;
     }
-    fclose(file);
   }
+  free(candidate);
   return loaded;
 }
 
@@ -96,6 +128,11 @@ int saveFavoriteFlags(TargetList *titles, const uint8_t *flags, size_t flagCount
     DPRINTF("ERROR: Failed to create favorites directory: %d\n", errno);
     return -EIO;
   }
+  // Do not truncate the only complete copy left by an earlier failed commit.
+  int recoveryResult = readFavoriteFile(tempPath, 1, NULL, NULL, NULL, 0);
+  if ((recoveryResult && recoveryResult != -ENOENT && recoveryResult != -EINVAL) ||
+      (!recoveryResult && commitConfigFile(tempPath, path)))
+    return -EIO;
   file = fopen(tempPath, "w");
   if (file == NULL) {
     DPRINTF("ERROR: Failed to open favorites file: %d\n", errno);
@@ -110,13 +147,13 @@ int saveFavoriteFlags(TargetList *titles, const uint8_t *flags, size_t flagCount
       return -EIO;
     }
   }
-  if (fclose(file)) {
+  int completeResult = fputs(favoritesComplete, file);
+  if (fclose(file) || completeResult == EOF) {
     remove(tempPath);
     return -EIO;
   }
 
-  remove(path);
-  if (rename(tempPath, path)) {
+  if (commitConfigFile(tempPath, path)) {
     DPRINTF("ERROR: Failed to commit favorites file: %d\n", errno);
     return -EIO;
   }

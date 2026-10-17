@@ -77,10 +77,34 @@ static void prepareGridSelector(GSTEXTURE *texture) {
 // Keep only the selected font's texture decoded and resident.
 static const BMFont *font = &BMFONT_DEJAVU_SANS;
 static UIFont activeUIFont = UI_FONT_DEJAVU;
-static u32 fontVram;
+static u32 fontVram = GSKIT_ALLOC_ERROR;
 static u32 fontVramSize;
+static int graphicsInitialized;
+
+static void finishGraphicsTransfers(void) {
+  if (gsGlobal == NULL)
+    return;
+  // Inline uploads keep their source pixels until the queued DMA completes.
+  gsKit_queue_exec(gsGlobal);
+  gsKit_finish();
+  dmaKit_wait_fast();
+}
+
+static void releaseGraphicsTexture(GSTEXTURE *texture) {
+  if (texture == NULL)
+    return;
+  if (gsGlobal != NULL && texture->Vram != 0)
+    gsKit_TexManager_free(gsGlobal, texture);
+  free(texture->Mem);
+  free(texture->Clut);
+  memset(texture, 0, sizeof(*texture));
+}
 
 int reserveUIFontVRAM(void) {
+  if (gsGlobal == NULL)
+    return -1;
+  if (fontVramSize != 0)
+    return 0;
   const BMFont *const fonts[] = {&BMFONT_DEJAVU_SANS, &BMFONT_PSBBN};
   u32 largest = 0;
 
@@ -90,9 +114,10 @@ int reserveUIFontVRAM(void) {
     if (bytes > largest)
       largest = bytes;
   }
-  fontVram = gsKit_vram_alloc(gsGlobal, largest, GSKIT_ALLOC_USERBUFFER);
-  if (fontVram == GSKIT_ALLOC_ERROR)
+  u32 address = gsKit_vram_alloc(gsGlobal, largest, GSKIT_ALLOC_USERBUFFER);
+  if (address == GSKIT_ALLOC_ERROR)
     return -1;
+  fontVram = address;
   fontVramSize = largest;
   return 0;
 }
@@ -104,10 +129,29 @@ static void releaseFontPages(void) {
     if (fontPages[i] == NULL)
       continue;
     free(fontPages[i]->Mem);
+    free(fontPages[i]->Clut);
     free(fontPages[i]);
   }
   free(fontPages);
   fontPages = NULL;
+}
+
+static void releaseGraphicsResources(void) {
+  finishGraphicsTransfers();
+  for (int i = 0; i < CARD_ART_COUNT; i++) {
+    releaseGraphicsTexture(&cardArtTextures[i]);
+    cardArtLoaded[i] = 0;
+    cardArtAttempted[i] = 0;
+  }
+  // Font pages use the reserved user buffer, not texture-manager allocations.
+  releaseFontPages();
+  releaseGraphicsTexture(icons);
+  free(icons);
+  icons = NULL;
+  releaseGraphicsTexture(gridSelector);
+  free(gridSelector);
+  gridSelector = NULL;
+  graphicsInitialized = 0;
 }
 
 static void prepareFontPageAlpha(GSTEXTURE *page) {
@@ -124,7 +168,7 @@ UIFont getUIFont(void) { return activeUIFont; }
 int setUIFont(UIFont selection) {
   if (selection < UI_FONT_DEJAVU || selection >= UI_FONT_COUNT)
     return -1;
-  if (fontVram == GSKIT_ALLOC_ERROR)
+  if (gsGlobal == NULL || fontVram == GSKIT_ALLOC_ERROR || fontVramSize == 0)
     return -1;
   if (selection == activeUIFont && fontPages != NULL)
     return 0;
@@ -145,6 +189,7 @@ int setUIFont(UIFont selection) {
       for (int j = 0; j <= i; j++) {
         if (nextPages[j] != NULL) {
           free(nextPages[j]->Mem);
+          free(nextPages[j]->Clut);
           free(nextPages[j]);
         }
       }
@@ -152,6 +197,7 @@ int setUIFont(UIFont selection) {
       return -1;
     }
   }
+  finishGraphicsTransfers();
   releaseFontPages();
   font = next;
   fontPages = nextPages;
@@ -170,18 +216,21 @@ int setUIFont(UIFont selection) {
 
 // Initializes and uploads graphics resources to GS VRAM
 int initGraphics() {
+  if (graphicsInitialized)
+    return 0;
   if (font->pageCount == 0) {
     DPRINTF("ERROR: Invalid number of font pages\n");
     return -1;
   }
   if (setUIFont(activeUIFont))
-    return -1;
+    goto fail;
 
   // Upload icons texture to GS
   icons = calloc(sizeof(GSTEXTURE), 1);
-  if (gsKit_texture_png_mem(gsGlobal, icons, ICONS_PNG, SIZE_ICONS_PNG, 0, 1)) {
+  if (icons == NULL ||
+      gsKit_texture_png_mem(gsGlobal, icons, ICONS_PNG, SIZE_ICONS_PNG, 0, 1)) {
     DPRINTF("ERROR: Failed to load icons texture\n");
-    return -1;
+    goto fail;
   }
 
   gridSelector = calloc(sizeof(GSTEXTURE), 1);
@@ -190,40 +239,33 @@ int initGraphics() {
                             SIZE_GRID_SELECTOR_PNG, 0, 0) == 0) {
     prepareGridSelector(gridSelector);
     gridSelector->Filter = GS_FILTER_LINEAR;
-    bindTextureSafe(gsGlobal, gridSelector);
+    if (!bindTextureSafe(gsGlobal, gridSelector)) {
+      releaseGraphicsTexture(gridSelector);
+      free(gridSelector);
+      gridSelector = NULL;
+    }
   } else {
     DPRINTF("WARNING: Failed to load Grid selector texture\n");
     if (gridSelector != NULL) {
-      free(gridSelector->Mem);
+      releaseGraphicsTexture(gridSelector);
       free(gridSelector);
       gridSelector = NULL;
     }
   }
 
+  graphicsInitialized = 1;
   return 0;
+fail:
+  // Keep the font reservation so this context can retry after a heap failure.
+  releaseGraphicsResources();
+  return -1;
 }
 
 // Frees memory used by font pages and icon textures
 void closeFont() {
-  for (int i = 0; i < CARD_ART_COUNT; i++) {
-    free(cardArtTextures[i].Mem);
-    cardArtTextures[i].Mem = NULL;
-    cardArtTextures[i].Vram = 0;
-    cardArtLoaded[i] = 0;
-    cardArtAttempted[i] = 0;
-  }
-  releaseFontPages();
-  fontVram = 0;
+  releaseGraphicsResources();
+  fontVram = GSKIT_ALLOC_ERROR;
   fontVramSize = 0;
-
-  free(icons->Mem);
-  free(icons);
-  if (gridSelector != NULL) {
-    free(gridSelector->Mem);
-    free(gridSelector);
-    gridSelector = NULL;
-  }
-  return;
 }
 
 // Returns icon width
@@ -719,6 +761,8 @@ int drawTextMarquee(int x1, int y, int x2, int z, uint64_t color, const char *te
 // Code based on gsToolkit.
 static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *buf, size_t size, int whiteTransparentRgb,
                                  int upload) {
+  if (texture == NULL || buf == NULL || size == 0)
+    return -1;
   FILE *file = fmemopen(buf, size, "rb");
   if (file == NULL) {
     DPRINTF("ERROR: Failed to load PNG file\n");

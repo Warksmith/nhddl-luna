@@ -1,172 +1,152 @@
 // Gets title ID from PS2 DVD
-#include "common.h"
+#include "devices/title_id.h"
 #include "dprintf.h"
-#include "ui/ui.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <stdio.h>
+#include <ps2sdkapi.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-//
-// This code is based on isofs.irx and title ID parsing code from Neutrino
-//
-
+// This code is based on isofs.irx and title ID parsing code from Neutrino.
 #define SECTOR_SIZE 2048
 #define TOC_LBA 16
 #define SYSTEM_CNF_NAME "SYSTEM.CNF;1"
+#define DIRECTORY_HEADER_SIZE 33
 
-struct dirTOCEntry {
-  short length;
-  uint32_t fileLBA;         // 2
-  uint32_t fileLBA_bigend;  // 6
-  uint32_t fileSize;        // 10
-  uint32_t fileSize_bigend; // 14
-  uint8_t dateStamp[6];     // 18
-  uint8_t reserved1;        // 24
-  uint8_t fileProperties;   // 25
-  uint8_t reserved2[6];     // 26
-  uint8_t filenameLength;   // 32
-  char filename[128];       // 33
-} __attribute__((packed));
+typedef struct {
+  uint64_t offset;
+  uint32_t size;
+} ISOExtent;
 
 static unsigned char iso_buf[SECTOR_SIZE];
 
-// Reads Primary Volume Descriptor from specified LBA and extracts root directory LBA
-static int getPVD(int fd, uint32_t *lba, int *length);
-// Retrieves SYSTEM.CNF TOC entry using specified root directory TOC
-static struct dirTOCEntry *getTOCEntry(int fd, uint32_t tocLBA, int tocLength);
+// ISO records need not be aligned for native integer loads.
+static uint32_t readLE32(const unsigned char *p) {
+  return (uint32_t)p[0] | (uint32_t)p[1] << 8 |
+         (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
 
-// Loads SYSTEM.CNF from ISO and extracts title ID
+static int readExact(int fd, void *buffer, size_t size) {
+  unsigned char *next = buffer;
+  while (size) {
+    ssize_t count = read(fd, next, size);
+    if (count < 0 && errno == EINTR)
+      continue;
+    if (count <= 0)
+      return -EIO;
+    next += count;
+    size -= count;
+  }
+  return 0;
+}
+
+static int validRecord(const unsigned char *record, size_t available) {
+  return available >= DIRECTORY_HEADER_SIZE &&
+         record[0] >= DIRECTORY_HEADER_SIZE && record[0] <= available &&
+         record[32] > 0 && record[32] <= record[0] - DIRECTORY_HEADER_SIZE;
+}
+
+static int recordExtent(const unsigned char *record, uint64_t isoSize,
+                         ISOExtent *extent) {
+  // Skip extended-attribute blocks, when present, to reach the file data.
+  extent->offset = ((uint64_t)readLE32(record + 2) + record[1]) * SECTOR_SIZE;
+  extent->size = readLE32(record + 10);
+  return extent->size && extent->offset <= isoSize &&
+         extent->size <= isoSize - extent->offset;
+}
+
+static int getPVD(int fd, uint64_t isoSize, ISOExtent *root) {
+  if (lseek64(fd, (int64_t)TOC_LBA * SECTOR_SIZE, SEEK_SET) < 0 ||
+      readExact(fd, iso_buf, sizeof(iso_buf)))
+    return -EIO;
+  if (iso_buf[0] != 1 || memcmp(iso_buf + 1, "CD001", 5) || iso_buf[6] != 1)
+    return -EINVAL;
+  const unsigned char *record = iso_buf + 0x9c;
+  if (!validRecord(record, sizeof(iso_buf) - 0x9c) || !(record[25] & 2) ||
+      !recordExtent(record, isoSize, root))
+    return -EINVAL;
+  return 0;
+}
+
+static int getTOCEntry(int fd, const ISOExtent *root, uint64_t isoSize,
+                       ISOExtent *systemCNF) {
+  uint32_t remaining = root->size;
+  uint64_t offset = root->offset;
+  while (remaining) {
+    size_t bytes = remaining < SECTOR_SIZE ? remaining : SECTOR_SIZE;
+    if (lseek64(fd, (int64_t)offset, SEEK_SET) < 0 ||
+        readExact(fd, iso_buf, bytes))
+      return -EIO;
+    for (size_t pos = 0; pos < bytes;) {
+      const unsigned char *record = iso_buf + pos;
+      if (!record[0])
+        break; // Padding ends this sector, not the entire directory.
+      if (!validRecord(record, bytes - pos))
+        return -EINVAL;
+      if (record[32] == sizeof(SYSTEM_CNF_NAME) - 1 &&
+          !memcmp(record + DIRECTORY_HEADER_SIZE, SYSTEM_CNF_NAME,
+                  sizeof(SYSTEM_CNF_NAME) - 1)) {
+        if ((record[25] & (2 | 0x80)) ||
+            !recordExtent(record, isoSize, systemCNF))
+          return -EINVAL;
+        return 0;
+      }
+      pos += record[0];
+    }
+    remaining -= bytes;
+    offset += bytes;
+  }
+  return -ENOENT;
+}
+
 char *getTitleID(char *path) {
-  // Open ISO
   int fd = open(path, O_RDONLY);
   if (fd < 0) {
-    DPRINTF("WARN: %s: Failed to open file: %d\n", path, fd);
+    DPRINTF("WARN: %s: Failed to open ISO\n", path);
     return NULL;
   }
-
-  // Get location of root directory entry
-  uint32_t rootLBA = 0;
-  int rootLength = 0;
-  if (getPVD(fd, &rootLBA, &rootLength) != 0) {
-    DPRINTF("WARN: %s: Failed to parse ISO PVD\n", path);
-    close(fd);
-    return NULL;
+  ISOExtent root, systemCNF;
+  char *text = NULL, *titleID = NULL;
+  int64_t isoSize = lseek64(fd, 0, SEEK_END);
+  if (isoSize < 0 || getPVD(fd, (uint64_t)isoSize, &root) ||
+      getTOCEntry(fd, &root, (uint64_t)isoSize, &systemCNF) ||
+      systemCNF.size > INT_MAX - 1) {
+    DPRINTF("WARN: %s: Invalid ISO metadata or SYSTEM.CNF extent\n", path);
+    goto done;
   }
-
-  // Get SYSTEM.CNF entry
-  struct dirTOCEntry *tocEntry = getTOCEntry(fd, rootLBA, rootLength);
-  if (tocEntry == NULL) {
-    DPRINTF("WARN: %s: Failed to find SYSTEM.CNF\n", path);
-    close(fd);
-    return NULL;
-  }
-
-  // Seek to SYSTEM.CNF location and read file contents
-  int64_t res = lseek64(fd, (int64_t)tocEntry->fileLBA * SECTOR_SIZE, SEEK_SET);
-  if (res < 0) {
-    DPRINTF("WARN: %s: Failed to seek to SYSTEM.CNF\n", path);
-    close(fd);
-    return NULL;
-  }
-  char *systemCNF = malloc(tocEntry->length);
-  if (read(fd, systemCNF, tocEntry->length) != tocEntry->length) {
+  text = malloc((size_t)systemCNF.size + 1);
+  if (!text || lseek64(fd, (int64_t)systemCNF.offset, SEEK_SET) < 0 ||
+      readExact(fd, text, systemCNF.size)) {
     DPRINTF("WARN: %s: Failed to read SYSTEM.CNF\n", path);
-    free(systemCNF);
-    close(fd);
-    return NULL;
+    goto done;
   }
+  text[systemCNF.size] = '\0';
 
-  char *boot2Arg = strstr(systemCNF, "BOOT2");
-  if (boot2Arg == NULL) {
-    DPRINTF("WARN: %s: BOOT2 not found in SYSTEM.CNF\n", path);
-    free(systemCNF);
-    close(fd);
-    return NULL;
+  const char *boot2 = strstr(text, "BOOT2");
+  if (!boot2)
+    goto done;
+  const char *lineEnd = boot2 + strcspn(boot2, "\r\n");
+  const char *filename = strstr(boot2, "cdrom0:");
+  if (!filename || filename >= lineEnd)
+    goto done;
+  filename += 7;
+  if (filename >= lineEnd || (*filename != '\\' && *filename != '/'))
+    goto done;
+  filename++;
+  // The eleven-byte title ID and its version suffix must fit in this line.
+  if (lineEnd - filename < 13 || filename[11] != ';' ||
+      filename[12] < '0' || filename[12] > '9')
+    goto done;
+  titleID = malloc(12);
+  if (titleID) {
+    memcpy(titleID, filename, 11);
+    titleID[11] = '\0';
   }
-
-  char *titleID = calloc(sizeof(char), 12);
-  // Locate and set ELF file name
-  char *selfFile = strstr(boot2Arg, "cdrom0:");
-  char *argEnd = strstr(boot2Arg, ";");
-  if (selfFile == NULL || argEnd == NULL) {
-    DPRINTF("WARN: %s: File name not found in SYSTEM.CNF\n", path);
-    free(titleID);
-    titleID = NULL;
-  } else {
-    // Extract title ID
-    argEnd[1] = '1';
-    argEnd[2] = '\0';
-    memcpy(titleID, &selfFile[8], 11);
-  }
-
-  free(systemCNF);
+done:
+  free(text);
   close(fd);
   return titleID;
-}
-
-// Reads Primary Volume Descriptor from specified LBA and extracts root directory LBA
-static int getPVD(int fd, uint32_t *lba, int *length) {
-  // Seek to PVD LBA
-  int64_t res = lseek64(fd, (int64_t)TOC_LBA * SECTOR_SIZE, SEEK_SET);
-  if (res < 0) {
-    return -EIO;
-  }
-  // Read the sector
-  if (read(fd, iso_buf, SECTOR_SIZE) == SECTOR_SIZE) {
-    // Make sure the sector contains PVD (type code 1, identifier CD001)
-    if ((iso_buf[0x00] == 1) && (!memcmp(&iso_buf[0x01], "CD001", 5))) {
-      // Read root directory entry and get LBA and length
-      struct dirTOCEntry *tocEntryPointer = (struct dirTOCEntry *)&iso_buf[0x9c];
-      *lba = tocEntryPointer->fileLBA;
-      *length = tocEntryPointer->length;
-      return 0;
-    } else {
-      return -EINVAL;
-    }
-  }
-  return -EIO;
-}
-
-// Retrieves SYSTEM.CNF TOC entry using specified root directory TOC
-static struct dirTOCEntry *getTOCEntry(int fd, uint32_t tocLBA, int tocLength) {
-  // Read TOC entries
-  int64_t res = 0;
-  while (tocLength > 0) {
-    // Seek to next LBA
-    res = lseek64(fd, (int64_t)tocLBA * SECTOR_SIZE, SEEK_SET);
-    if (res < 0) {
-      return NULL;
-    }
-    // Read the sector
-    if (read(fd, iso_buf, SECTOR_SIZE) != SECTOR_SIZE) {
-      return NULL;
-    }
-
-    // Read directory entries until the end of sector
-    int tocPos = 0;
-    struct dirTOCEntry *tocEntryPointer;
-    do {
-      tocEntryPointer = (struct dirTOCEntry *)&iso_buf[tocPos];
-
-      if (tocEntryPointer->length == 0)
-        break;
-
-      if (tocEntryPointer->filenameLength && !strcmp(SYSTEM_CNF_NAME, tocEntryPointer->filename)) {
-        // File has been found
-        return tocEntryPointer;
-      }
-      // Advance to the next entry
-      tocPos += (tocEntryPointer->length << 16) >> 16;
-    } while (tocPos < 2016);
-
-    // Get next sector LBA
-    tocLength -= SECTOR_SIZE;
-    tocLBA++;
-  }
-
-  return NULL;
 }

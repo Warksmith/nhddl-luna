@@ -12,6 +12,7 @@
 #include "ui/view_internal.h"
 #include <dirent.h>
 #include <ctype.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <hdd-ioctl.h>
 #include <libpad.h>
@@ -1082,7 +1083,14 @@ static int measureTree(const char *source, int depth, CopyProgress *progress) {
     if (directory == NULL)
       return -1;
     struct dirent *item;
-    while ((item = readdir(directory)) != NULL) {
+    while (1) {
+      errno = 0;
+      item = readdir(directory);
+      if (!item) {
+        int failed = errno != 0;
+        if (closedir(directory)) failed = 1;
+        return failed ? -1 : 0;
+      }
       char *child;
       int result;
       if (!strcmp(item->d_name, ".") || !strcmp(item->d_name, ".."))
@@ -1104,8 +1112,6 @@ static int measureTree(const char *source, int depth, CopyProgress *progress) {
         return -1;
       }
     }
-    closedir(directory);
-    return 0;
   }
   if (!S_ISREG(info.st_mode))
     return -1;
@@ -1141,7 +1147,14 @@ static int copyTree(const char *source, const char *destination, int depth,
     directory = opendir(source);
     if (directory == NULL)
       return -1;
-    while ((item = readdir(directory)) != NULL) {
+    while (1) {
+      errno = 0;
+      item = readdir(directory);
+      if (!item) {
+        int failed = errno != 0;
+        if (closedir(directory)) failed = 1;
+        return failed ? -1 : 0;
+      }
       char *paths;
       int result;
       if (!strcmp(item->d_name, ".") || !strcmp(item->d_name, ".."))
@@ -1165,8 +1178,6 @@ static int copyTree(const char *source, const char *destination, int depth,
         return -1;
       }
     }
-    closedir(directory);
-    return 0;
   }
   if (!S_ISREG(info.st_mode))
     return -1;
@@ -1180,6 +1191,7 @@ static int copyTree(const char *source, const char *destination, int depth,
   }
   char *buffer = malloc(COPY_BUFFER_SIZE);
   int result = buffer == NULL ? -1 : 0;
+  uint64_t copiedBytes = 0;
   progress->files++;
   showCopyProgress(progress, source, 0);
   while (result == 0 && !copyCancelled(progress)) {
@@ -1199,16 +1211,18 @@ static int copyTree(const char *source, const char *destination, int depth,
       offset += written;
     }
     if (result == 0) {
+      copiedBytes += bytes;
       progress->bytes += bytes;
       showCopyProgress(progress, source, 0);
     }
   }
-  if (progress->cancelled)
+  if (progress->cancelled || copiedBytes != (uint64_t)info.st_size)
     result = -1;
   free(buffer);
   if (close(output) != 0)
     result = -1;
-  close(input);
+  if (close(input) != 0)
+    result = -1;
   if (result != 0)
     unlink(destination);
   return result;
@@ -1228,7 +1242,13 @@ static int verifyTree(const char *source, const char *destination, int depth,
       return -1;
     struct dirent *item;
     int result = 0;
-    while ((item = readdir(directory)) != NULL) {
+    while (1) {
+      errno = 0;
+      item = readdir(directory);
+      if (!item) {
+        if (errno) result = -1;
+        break;
+      }
       char *paths;
       if (!strcmp(item->d_name, ".") || !strcmp(item->d_name, ".."))
         continue;
@@ -1244,7 +1264,7 @@ static int verifyTree(const char *source, const char *destination, int depth,
       }
       free(paths);
     }
-    closedir(directory);
+    if (closedir(directory)) result = -1;
     return result;
   }
   if (!S_ISREG(sourceInfo.st_mode) || !S_ISREG(destinationInfo.st_mode) ||
@@ -1261,6 +1281,7 @@ static int verifyTree(const char *source, const char *destination, int depth,
   }
   char *buffers = malloc(2 * COPY_BUFFER_SIZE);
   int result = buffers == NULL ? -1 : 0;
+  uint64_t verifiedBytes = 0;
   while (result == 0 && !copyCancelled(progress)) {
     int count = read(sourceFd, buffers, COPY_BUFFER_SIZE);
     if (count < 0) {
@@ -1279,14 +1300,18 @@ static int verifyTree(const char *source, const char *destination, int depth,
       }
       received += chunk;
     }
-    if (result == 0 && memcmp(buffers, buffers + COPY_BUFFER_SIZE, count))
-      result = -1;
+    if (result == 0) {
+      if (memcmp(buffers, buffers + COPY_BUFFER_SIZE, count))
+        result = -1;
+      else
+        verifiedBytes += count;
+    }
   }
-  if (progress->cancelled)
+  if (progress->cancelled || verifiedBytes != (uint64_t)sourceInfo.st_size)
     result = -1;
   free(buffers);
-  close(sourceFd);
-  close(destinationFd);
+  if (close(sourceFd)) result = -1;
+  if (close(destinationFd)) result = -1;
   return result;
 }
 
@@ -1302,7 +1327,13 @@ static int removeCopyTree(const char *path, int depth) {
     return -1;
   struct dirent *item;
   int result = 0;
-  while ((item = readdir(directory)) != NULL) {
+  while (!result) {
+    errno = 0;
+    item = readdir(directory);
+    if (!item) {
+      if (errno) result = -1;
+      break;
+    }
     char *child;
     if (!strcmp(item->d_name, ".") || !strcmp(item->d_name, ".."))
       continue;
@@ -1312,7 +1343,7 @@ static int removeCopyTree(const char *path, int depth) {
       result = -1;
     free(child);
   }
-  closedir(directory);
+  if (closedir(directory)) result = -1;
   if (result == 0 && rmdir(path) != 0)
     result = -1;
   return result;

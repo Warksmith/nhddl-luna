@@ -1931,7 +1931,8 @@ int serviceGridArt(void) {
         if (gridArtJob.thumbnail == 1 || gridArtJob.thumbnail == 3)
           rememberGridThumbnail(gridArtJob.path, (const PSBBNPixel *)texture->Mem,
                                  texture->Width, texture->Height);
-        bindTextureSafe(gsGlobal, texture);
+        // Refresh can evict these pixels before drawing. Inline uploads retain
+        // Mem until queue_exec, so bind only in the renderer after replacements.
       } else if (gridArtJob.missingFile &&
                  (gridArtJob.thumbnail == 1 || gridArtJob.thumbnail == 3)) {
         rememberGridThumbnail(gridArtJob.path, NULL, 0, 0);
@@ -1952,7 +1953,7 @@ int serviceGridArt(void) {
         memset(&gridArtJob.texture, 0, sizeof(gridArtJob.texture));
         gridSelectedLoaded[buffer] = 1;
         gridSelectedStatus[buffer] = 2;
-        bindTextureSafe(gsGlobal, texture);
+        // Upload while drawing, after the page/selection cache is refreshed.
       } else {
         gridSelectedStatus[buffer] = 3;
       }

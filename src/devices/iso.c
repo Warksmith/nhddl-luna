@@ -14,6 +14,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <ps2sdkapi.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,12 +63,18 @@ int findISO(TargetList *result, struct DeviceMapEntry *device) {
     return -EIO;
   }
 
-  chdir(device->mountpoint);
-  if (_findISO(directory, result, device)) {
+  char previousDirectory[PATH_MAX + 1];
+  if (!getcwd(previousDirectory, sizeof(previousDirectory)) || chdir(device->mountpoint)) {
     closedir(directory);
     return -EIO;
   }
-  closedir(directory);
+  int scanResult = _findISO(directory, result, device);
+  if (closedir(directory) && !scanResult)
+    scanResult = -EIO;
+  if (chdir(previousDirectory) && !scanResult)
+    scanResult = -EIO;
+  if (scanResult)
+    return scanResult;
 
   if (result->total == 0) {
     return -ENOENT;
@@ -86,7 +93,7 @@ int findISO(TargetList *result, struct DeviceMapEntry *device) {
 // Searches rootpath and adds discovered ISOs to TargetList
 int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) {
   if (directory == NULL)
-    return -ENOENT;
+    return -EIO;
 
   // Read directory entries
   struct dirent *entry;
@@ -94,10 +101,12 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
   char titlePath[PATH_MAX + 1];
   if (!getcwd(titlePath, PATH_MAX + 1)) { // Initialize titlePath with current working directory
     uiSplashLogString(LEVEL_ERROR, "Failed to get cwd\n");
-    return -ENOENT;
+    return -EIO;
   }
   int cwdLen = strlen(titlePath);     // Get the length of base path string
   if (titlePath[cwdLen - 1] != '/') { // Add path separator if cwd doesn't have one
+    if ((size_t)cwdLen >= sizeof(titlePath) - 1)
+      return -ENAMETOOLONG;
     strcat(titlePath, "/");
     cwdLen++;
   }
@@ -106,10 +115,20 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
   if (curRecursionLevel == MAX_SCAN_DEPTH)
     DPRINTF("Max recursion limit reached, all directories in %s will be ignored\n", titlePath);
 
-  while ((entry = readdir(directory)) != NULL) {
+  int scanResult = 0;
+  while (1) {
+    errno = 0;
+    entry = readdir(directory);
+    if (!entry) {
+      if (errno) scanResult = -EIO;
+      break;
+    }
     // Reset titlePath by ending string on base path
     titlePath[cwdLen] = '\0';
-    if (strlen(entry->d_name) > sizeof(titlePath)-1-(size_t)cwdLen) continue;
+    if (strlen(entry->d_name) > sizeof(titlePath)-1-(size_t)cwdLen) {
+      scanResult = -ENAMETOOLONG;
+      goto done;
+    }
 
     // Ignore .files and directories
     if (entry->d_name[0] == '.')
@@ -136,12 +155,23 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
       DIR *d = opendir(titlePath);
       if (d == NULL) {
         DPRINTF("Failed to open %s for scanning\n", entry->d_name);
-        continue;
+        scanResult = -EIO;
+        goto done;
       }
-      chdir(titlePath);
+      if (chdir(titlePath)) {
+        closedir(d);
+        scanResult = -EIO;
+        goto done;
+      }
       // Process inner directory recursively
-      _findISO(d, result, device);
-      closedir(d);
+      scanResult = _findISO(d, result, device);
+      if (closedir(d) && !scanResult)
+        scanResult = -EIO;
+      titlePath[cwdLen] = '\0';
+      if (chdir(titlePath) && !scanResult)
+        scanResult = -EIO;
+      if (scanResult)
+        goto done;
 
     next:
       break;
@@ -159,7 +189,7 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
 
         // Initialize target
         Target *title = calloc(sizeof(Target), 1);
-        if (!title) { curRecursionLevel--; return -ENOMEM; }
+        if (!title) { scanResult = -ENOMEM; goto done; }
         title->prev = NULL;
         title->next = NULL;
         title->fullPath = strdup(titlePath);
@@ -171,7 +201,7 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
         title->name = calloc(sizeof(char), nameLength + 1);
         if (!title->fullPath || !title->name) {
           free(title->fullPath); free(title->name); free(title);
-          curRecursionLevel--; return -ENOMEM;
+          scanResult = -ENOMEM; goto done;
         }
         strncpy(title->name, entry->d_name, nameLength);
 
@@ -179,9 +209,10 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
       }
     }
   }
+done:
   curRecursionLevel--;
 
-  return 0;
+  return scanResult;
 }
 
 // Fills in title ID for every entry in the list
@@ -190,7 +221,7 @@ void processTitleID(TargetList *result, struct DeviceMapEntry *device) {
     return;
 
   // Load title cache
-  TitleIDCache *cache = malloc(sizeof(TitleIDCache));
+  TitleIDCache *cache = calloc(1, sizeof(TitleIDCache));
   if (!cache) return;
   int ps2Count = 0;
   for (Target *t=result->first;t;t=t->next)
@@ -404,11 +435,11 @@ static int compareCachePaths(const void *left, const void *right) {
 }
 
 int loadTitleIDCache(TitleIDCache *cache, struct DeviceMapEntry *device) {
+  cache->total = 0;
+  cache->entries = NULL;
   // Make sure path exists
   if (device->mode == MODE_NONE || device->mountpoint == NULL)
     return -ENODEV;
-
-  cache->total = 0;
 
   // Open cache file for reading
   char cachePath[PATH_MAX];
@@ -429,76 +460,77 @@ int loadTitleIDCache(TitleIDCache *cache, struct DeviceMapEntry *device) {
   if (file == NULL)
     return -ENOENT;
 
-  int result;
+  int result = -EINVAL;
+  int readIndex = 0;
+  CacheEntry *entries = NULL;
 
   // Read cache file header
   CacheMetadata meta;
-  result = fread(&meta, sizeof(CacheMetadata), 1, file);
-  if (!result) {
+  if (fread(&meta, sizeof(CacheMetadata), 1, file) != 1) {
     DPRINTF("ERROR: Failed to read cache metadata\n");
-    fclose(file);
-    return result;
+    result = -EIO;
+    goto fail;
   }
 
   // Make sure header is valid
   if (memcmp(meta.magic, CACHE_MAGIC, sizeof(meta.magic)) != 0) {
     DPRINTF("ERROR: Cache magic doesn't match, refusing to load\n");
-    fclose(file);
-    return -EINVAL;
+    goto fail;
   }
   if (meta.version != CACHE_VERSION) {
     DPRINTF("ERROR: Unsupported cache version %d\n", meta.version);
-    fclose(file);
-    return -EINVAL;
+    goto fail;
   }
 
   long entriesStart = ftell(file);
   if (meta.total < 0 || fseek(file, 0, SEEK_END) != 0) {
-    fclose(file);
-    return -EINVAL;
+    goto fail;
   }
   long fileSize = ftell(file);
   if (entriesStart < 0 || fileSize < entriesStart ||
-      meta.total > (fileSize - entriesStart) / (long)sizeof(CacheEntryHeader) ||
+      meta.total > (fileSize - entriesStart) / (long)(sizeof(CacheEntryHeader) + 2) ||
+      (size_t)meta.total > SIZE_MAX / sizeof(CacheEntry) ||
       fseek(file, entriesStart, SEEK_SET) != 0) {
     DPRINTF("ERROR: Invalid cache entry count %d\n", meta.total);
-    fclose(file);
-    return -EINVAL;
+    goto fail;
   }
 
   // Allocate memory for cache entries based on total entry count from header metadata
-  int readIndex = 0;
-  cache->entries = malloc((sizeof(CacheEntry) * meta.total));
-  if (cache->entries == NULL) {
+  if (meta.total > 0)
+    entries = malloc(sizeof(CacheEntry) * (size_t)meta.total);
+  if (meta.total > 0 && entries == NULL) {
     DPRINTF("ERROR: Can't allocate enough memory\n");
-    fclose(file);
-    return -ENOMEM;
+    result = -ENOMEM;
+    goto fail;
   }
 
   // Read each entry into cache
   CacheEntryHeader header;
   char pathBuf[PATH_MAX + 1];
-  while (readIndex < meta.total && !feof(file)) {
+  while (readIndex < meta.total) {
     // Read cache entry header
     pathBuf[0] = '\0';
-    result = fread(&header, sizeof(CacheEntryHeader), 1, file);
-    if (result != 1) {
-      if (!feof(file))
-        DPRINTF("WARN: Read less than expected, title ID cache might be incomplete\n");
-      break;
+    if (fread(&header, sizeof(CacheEntryHeader), 1, file) != 1) {
+      DPRINTF("WARN: Incomplete title ID cache header\n");
+      result = -EIO;
+      goto fail;
     }
-    if (header.pathLength == 0 || header.pathLength > PATH_MAX) {
-      DPRINTF("WARN: Invalid cached path length\n");
-      break;
+    if (header.pathLength < 2 || header.pathLength > PATH_MAX ||
+        header.titleID[11] != '\0' || memchr(header.titleID, '\0', 11)) {
+      DPRINTF("WARN: Invalid cached path length or title ID\n");
+      goto fail;
     }
     // Read ISO path
-    result = fread(pathBuf, header.pathLength, 1, file);
-    if (result != 1) {
+    if (fread(pathBuf, header.pathLength, 1, file) != 1) {
       DPRINTF("WARN: Read less than expected, title ID cache might be incomplete\n");
-      break;
+      result = -EIO;
+      goto fail;
     }
-    pathBuf[header.pathLength] = '\0';
-    pathBuf[header.pathLength - 1] = '\0';
+    if (pathBuf[header.pathLength - 1] != '\0' ||
+        memchr(pathBuf, '\0', header.pathLength - 1)) {
+      DPRINTF("WARN: Invalid cached path terminator\n");
+      goto fail;
+    }
 
     // Store entry in cache
     CacheEntry entry;
@@ -506,28 +538,31 @@ int loadTitleIDCache(TitleIDCache *cache, struct DeviceMapEntry *device) {
     entry.titleID[11] = '\0';
     entry.fullPath = strdup(pathBuf);
     if (!entry.fullPath) {
-      for (int i = 0; i < readIndex; i++) free(cache->entries[i].fullPath);
-      free(cache->entries);
-      cache->entries = NULL;
-      fclose(file);
-      return -ENOMEM;
+      result = -ENOMEM;
+      goto fail;
     }
-    cache->entries[readIndex] = entry;
+    entries[readIndex] = entry;
     readIndex++;
   }
-  fclose(file);
-
-  // Free unused memory
-  if (readIndex != meta.total && readIndex > 0) {
-    CacheEntry *resized = realloc(cache->entries, sizeof(CacheEntry) * readIndex);
-    if (resized) cache->entries = resized;
+  if (fclose(file)) {
+    file = NULL;
+    result = -EIO;
+    goto fail;
   }
 
+  cache->entries = entries;
   cache->total = readIndex;
   // Directory discovery order may differ from both old and new cache files.
   if (cache->total > 1)
     qsort(cache->entries, (size_t)cache->total, sizeof(*cache->entries), compareCachePaths);
   return 0;
+fail:
+  if (file)
+    fclose(file);
+  for (int i = 0; i < readIndex; i++)
+    free(entries[i].fullPath);
+  free(entries);
+  return result;
 }
 
 // Returns a pointer to title ID or NULL if fullPath is not found in the cache
