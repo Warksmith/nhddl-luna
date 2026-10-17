@@ -5,6 +5,7 @@
 #include "devices/init.h"
 #include "options.h"
 #include "target.h"
+#include <stddef.h>
 
 typedef enum {
   LAUNCH_STAGE_PREPARING = 0,
@@ -31,5 +32,7 @@ void launchTitleWithCheatProgress(Target *target, ArgumentList *arguments,
                                   const char *payload,
                                   LaunchProgressCallback progress, void *userdata);
 int launchTitleArgumentsFit(Target *target, ArgumentList *arguments, const char *payload);
+// Mutually exclusive launchers share the resident argument buffer.
+void *lunaElfLaunchWorkspace(size_t bytes);
 
 #endif

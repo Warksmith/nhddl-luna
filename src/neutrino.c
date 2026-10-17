@@ -345,6 +345,10 @@ __attribute__((section("._launch_args"))) // Place launchArgs in the _launch_arg
 __attribute__((aligned(16)))              // Align the pointer
 static char launchArgs[LAUNCH_ARGS_BYTES] __attribute__((aligned(16)));
 
+void *lunaElfLaunchWorkspace(size_t bytes) {
+  return bytes <= sizeof(launchArgs) ? launchArgs : NULL;
+}
+
 __attribute__((section("._launch_elf"))) // Place launchELF in the _launch_elf memory section
 __attribute__((noreturn))                // Mark as noreturn
 int launchELF(int argc, char *argv[]) {

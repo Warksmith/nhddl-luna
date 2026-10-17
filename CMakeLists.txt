@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.13)
 
 include($ENV{PS2SDK}/ps2dev.cmake)
 
-project(luna)
+project(luna C ASM)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Executable name
 set(EE_BIN "luna_unc.elf")
@@ -45,12 +45,16 @@ set(SOURCES
     src/target.c
     src/storage.c
     src/forwarder.c
+    src/homebrew_elf.c
+    src/homebrew_launch.c
+    src/homebrew_transfer.S
 
     # UI
     src/ui/gui.c
     src/ui/file_manager.c
     src/ui/file_browser.c
     src/ui/file_operations.c
+    src/ui/text_file.c
     src/vmc_create.c
     src/ui/options_menu.c
     src/ui/game_options.c
