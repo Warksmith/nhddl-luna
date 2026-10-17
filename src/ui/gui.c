@@ -8,6 +8,8 @@
 #include "options.h"
 #include "ui/ambient.h"
 #include "ui/ambient_orbs.h"
+#include "ui/neo.h"
+#include "ui/wallpapers.h"
 #include "ui/art_cache.h"
 #include "ui/file_manager.h"
 #include "storage.h"
@@ -260,6 +262,8 @@ int uiInit() {
   StartTimerSystemTime();
   resetGlassVisuals(uiNowMs());
   resetAmbientOrbsTextures();
+  resetNeoBackground();
+  resetAnimatedWallpapers();
   gsGlobal = gsKit_init_global();
   initVMode(gsGlobal);
   gsGlobal->PSM = GS_PSM_CT24; // Set color depth to avoid PAL VRAM issues

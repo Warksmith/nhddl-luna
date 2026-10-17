@@ -754,7 +754,8 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
   if (state->page == OPTIONS_GLOBAL) {
     static const char *const backgroundLabels[LIBRARY_BACKGROUND_COUNT] = {
         "Stars & cubes", "Ambient Orbs", "Red Clouds", "Midnight Cubes",
-        "System Configuration"};
+        "System Configuration", "Neo", "Aurora", "Ronin", "Gridrunner",
+        "Torch", "Tempest"};
     const int firstY = menuTop + lineHeight + 4;
     const int rowStep = (menuBottom - firstY - 3 * lineHeight) / 7;
     int selectorY = optionsSelectorY(&state->selector, state->page, state->selectedGlobal,

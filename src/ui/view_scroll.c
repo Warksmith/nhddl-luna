@@ -3,6 +3,8 @@
 #include "ui/language.h"
 #include "ui/view_scroll.h"
 #include "ui/ambient_orbs.h"
+#include "ui/neo.h"
+#include "ui/wallpapers.h"
 #include "ui/ps2_menu_scene.h"
 #include "options.h"
 #include "dprintf.h"
@@ -1578,7 +1580,12 @@ static void drawBiosSystemConfiguration(uint32_t frameNowMs) {
 }
 
 void drawSharedLibraryBackground(uint32_t frameNowMs) {
-  if (libraryBackground == LIBRARY_BACKGROUND_RED_CLOUDS)
+  if (libraryBackground >= LIBRARY_BACKGROUND_AURORA &&
+      libraryBackground <= LIBRARY_BACKGROUND_TEMPEST)
+    drawAnimatedWallpaper(libraryBackground, frameNowMs);
+  else if (libraryBackground == LIBRARY_BACKGROUND_NEO)
+    drawNeoBackground(frameNowMs);
+  else if (libraryBackground == LIBRARY_BACKGROUND_RED_CLOUDS)
     drawRedClouds(frameNowMs);
   else if (libraryBackground == LIBRARY_BACKGROUND_MIDNIGHT_CUBES)
     drawMidnightCubes(frameNowMs);

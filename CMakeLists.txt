@@ -69,6 +69,8 @@ set(SOURCES
   src/ui/view_3d.c
   src/ui/view_scroll.c
   src/ui/ambient_orbs.c
+  src/ui/neo.c
+  src/ui/wallpapers.c
     src/ui/pad.c
 
     # Devices

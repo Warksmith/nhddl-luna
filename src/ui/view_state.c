@@ -283,6 +283,18 @@ LibraryBackground loadLibraryBackground(Target *target) {
       return LIBRARY_BACKGROUND_MIDNIGHT_CUBES;
     if (!strcmp(value, "system-config"))
       return LIBRARY_BACKGROUND_SYSTEM_CONFIG;
+    if (!strcmp(value, "neo"))
+      return LIBRARY_BACKGROUND_NEO;
+    if (!strcmp(value, "aurora"))
+      return LIBRARY_BACKGROUND_AURORA;
+    if (!strcmp(value, "ronin"))
+      return LIBRARY_BACKGROUND_RONIN;
+    if (!strcmp(value, "gridrunner"))
+      return LIBRARY_BACKGROUND_GRIDRUNNER;
+    if (!strcmp(value, "torch") || !strcmp(value, "ember"))
+      return LIBRARY_BACKGROUND_TORCH;
+    if (!strcmp(value, "tempest"))
+      return LIBRARY_BACKGROUND_TEMPEST;
     if (!strcmp(value, "stars"))
       return LIBRARY_BACKGROUND_STARS;
   }
@@ -309,7 +321,8 @@ int saveLibraryBackground(Target *target, LibraryBackground background) {
   if (file == NULL)
     return -EIO;
   static const char *const names[LIBRARY_BACKGROUND_COUNT] = {
-      "stars", "orbs", "red-clouds", "midnight-cubes", "system-config"};
+      "stars", "orbs", "red-clouds", "midnight-cubes", "system-config", "neo",
+      "aurora", "ronin", "gridrunner", "torch", "tempest"};
   if (background < LIBRARY_BACKGROUND_STARS || background >= LIBRARY_BACKGROUND_COUNT) {
     fclose(file);
     remove(tempPath);
