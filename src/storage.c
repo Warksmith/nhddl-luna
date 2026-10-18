@@ -228,6 +228,11 @@ TargetList *storageRefresh(TargetList *previous) {
   LAUNCHER_OPTIONS.mode = wanted & ~failed;
   initDeviceMap();
   LAUNCHER_OPTIONS.mode = loaded;
+  failed |= deviceDiscoveryFailures();
+  if (previous && (failed & desired.enabled)) {
+    refreshError = -EIO;
+    goto fail;
+  }
   memset(STORAGE_STATUS, 0, sizeof(STORAGE_STATUS));
   for (int s = 0; s < STORAGE_SOURCE_COUNT; s++) {
     ModeType mode = modes[s];
@@ -248,6 +253,8 @@ TargetList *storageRefresh(TargetList *previous) {
       }
       if (!(scan & mode) || (result && result != -ENOENT)) {
         if (result) {
+          uiSplashLogString(LEVEL_WARN, "%s: %s (%d)\n",
+                            lunaText(names[s]), lunaText("Scan failed"), result);
           freeTargetList(part);
           part = calloc(1, sizeof(*part));
           if (!part) goto fail;
@@ -261,7 +268,14 @@ TargetList *storageRefresh(TargetList *previous) {
           int relative = getRelativePathIdx(t->fullPath);
           if (relative >= 0 && strcmp(t->device->mountpoint, dev->mountpoint)) {
             char path[PATH_MAX + 1];
-            snprintf(path, sizeof(path), "%s%s", dev->mountpoint, t->fullPath + relative);
+            int length = snprintf(path, sizeof(path), "%s%s", dev->mountpoint,
+                                   t->fullPath + relative);
+            if (length < 0 || (size_t)length >= sizeof(path)) {
+              free(copy->fullPath); free(copy->name); free(copy->id); free(copy);
+              freeTargetList(part);
+              refreshError = -ENAMETOOLONG;
+              goto fail;
+            }
             free(copy->fullPath);
             copy->fullPath = strdup(path);
             if (!copy->fullPath) {

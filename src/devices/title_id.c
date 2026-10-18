@@ -15,6 +15,7 @@
 #define TOC_LBA 16
 #define SYSTEM_CNF_NAME "SYSTEM.CNF;1"
 #define DIRECTORY_HEADER_SIZE 33
+#define MAX_SYSTEM_CNF_SIZE (64U * 1024U)
 
 typedef struct {
   uint64_t offset;
@@ -59,6 +60,7 @@ static int recordExtent(const unsigned char *record, uint64_t isoSize,
 }
 
 static int getPVD(int fd, uint64_t isoSize, ISOExtent *root) {
+  if (isoSize < (uint64_t)(TOC_LBA + 1) * SECTOR_SIZE) return -EINVAL;
   if (lseek64(fd, (int64_t)TOC_LBA * SECTOR_SIZE, SEEK_SET) < 0 ||
       readExact(fd, iso_buf, sizeof(iso_buf)))
     return -EIO;
@@ -106,24 +108,31 @@ char *getTitleID(char *path) {
   int fd = open(path, O_RDONLY);
   if (fd < 0) {
     DPRINTF("WARN: %s: Failed to open ISO\n", path);
+    errno = EIO;
     return NULL;
   }
   ISOExtent root, systemCNF;
   char *text = NULL, *titleID = NULL;
+  int error = -EINVAL;
   int64_t isoSize = lseek64(fd, 0, SEEK_END);
-  if (isoSize < 0 || getPVD(fd, (uint64_t)isoSize, &root) ||
-      getTOCEntry(fd, &root, (uint64_t)isoSize, &systemCNF) ||
-      systemCNF.size > INT_MAX - 1) {
+  if (isoSize < 0) { error = -EIO; goto done; }
+  error = getPVD(fd, (uint64_t)isoSize, &root);
+  if (!error) error = getTOCEntry(fd, &root, (uint64_t)isoSize, &systemCNF);
+  if (error || systemCNF.size > MAX_SYSTEM_CNF_SIZE) {
     DPRINTF("WARN: %s: Invalid ISO metadata or SYSTEM.CNF extent\n", path);
+    if (error != -EIO) error = -EINVAL;
     goto done;
   }
   text = malloc((size_t)systemCNF.size + 1);
-  if (!text || lseek64(fd, (int64_t)systemCNF.offset, SEEK_SET) < 0 ||
+  if (!text) { error = -ENOMEM; goto done; }
+  if (lseek64(fd, (int64_t)systemCNF.offset, SEEK_SET) < 0 ||
       readExact(fd, text, systemCNF.size)) {
     DPRINTF("WARN: %s: Failed to read SYSTEM.CNF\n", path);
+    error = -EIO;
     goto done;
   }
   text[systemCNF.size] = '\0';
+  error = -EINVAL;
 
   const char *boot2 = strstr(text, "BOOT2");
   if (!boot2)
@@ -144,9 +153,14 @@ char *getTitleID(char *path) {
   if (titleID) {
     memcpy(titleID, filename, 11);
     titleID[11] = '\0';
-  }
+  } else error = -ENOMEM;
 done:
   free(text);
-  close(fd);
+  if (close(fd) < 0) {
+    free(titleID);
+    titleID = NULL;
+    error = -EIO;
+  }
+  errno = titleID ? 0 : -error;
   return titleID;
 }

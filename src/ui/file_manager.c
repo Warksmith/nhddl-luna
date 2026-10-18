@@ -71,16 +71,33 @@ static FileManagerLayout fileManagerLayout(void) {
   int line = getFontLineHeight();
   FileManagerLayout layout = {0};
   layout.paneTop = 52;
-  layout.listTop = layout.paneTop + line + 22;
+  layout.listTop = layout.paneTop + 2 * line + 22;
   layout.summaryTop = gsGlobal->Height - footerHeight - 2 * line - 16;
   layout.paneBottom = layout.summaryTop - 8;
   layout.listBottom = layout.paneBottom - 6;
   layout.statusTop = layout.summaryTop + line + 8;
-  layout.rowStep = line + line / 3;
+  layout.rowStep = line + line / 2;
   layout.visible = (layout.listBottom - layout.listTop) / layout.rowStep;
   if (layout.visible < 1) layout.visible = 1;
   return layout;
 }
+
+// Modal surfaces reuse the live browser without flipping the frame underneath.
+// The scene exists only while the File Explorer owns these objects.
+static struct {
+  const BrowserRoot *roots;
+  int rootCount;
+  const BrowserPane *browser;
+  const CopyQueue *queue;
+  const int *trayCollapsed;
+  const int *move;
+} fileManagerScene;
+
+static void drawFileManagerContents(const BrowserRoot *roots, int rootCount,
+    const BrowserPane *browser, const CopyQueue *queue, int trayCollapsed,
+    const char *status, PromptBar footer, int progressPercent);
+static void fileManagerFitText(const char *text, int width,
+    char *out, size_t capacity, int tail);
 
 typedef struct {
   int selected;
@@ -147,6 +164,71 @@ static void presentBrowserFrame(void) {
   gsKit_finish();
   gsKit_sync_flip(gsGlobal);
   usleep(1000);
+}
+
+static void drawFileManagerModal(int left, int top, int right, int bottom,
+                                 const char *title) {
+  if (fileManagerScene.browser)
+    drawFileManagerContents(fileManagerScene.roots, fileManagerScene.rootCount,
+        fileManagerScene.browser, fileManagerScene.queue,
+        *fileManagerScene.trayCollapsed, "", (PromptBar){0}, -1);
+  else {
+    gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
+    drawBrowserSheet(1);
+  }
+  gsKit_prim_sprite(gsGlobal, 0, 0, gsGlobal->Width, gsGlobal->Height, 10,
+                    GS_SETREG_RGBA(0x00, 0x03, 0x0A, 0x48));
+  gsKit_prim_sprite(gsGlobal, left + 5, top + 6, right + 5, bottom + 6, 11,
+                    GS_SETREG_RGBA(0, 0, 0, 0x50));
+  gsKit_prim_sprite(gsGlobal, left, top, right, bottom, 12,
+                    glassPresetColor(0x10, 0x20, 0x34, 0x7C));
+  uint64_t edge = glassPresetColor(0x89, 0xAE, 0xC6, 0x40);
+  gsKit_prim_sprite(gsGlobal, left, top, right, top + 1, 13, edge);
+  gsKit_prim_sprite(gsGlobal, left, top, left + 1, bottom, 13, edge);
+  gsKit_prim_sprite(gsGlobal, right - 1, top, right, bottom, 13, edge);
+  gsKit_prim_sprite(gsGlobal, left, bottom - 1, right, bottom, 13, edge);
+  int line = getFontLineHeight();
+  char fitted[PATH_MAX + 64];
+  fileManagerFitText(title, right - left - 28, fitted, sizeof(fitted), 0);
+  drawTextWindow(left + 14, top + 10, right - 14, top + 10 + line, 14,
+                 HeaderTextColor, ALIGN_LEFT, fitted);
+  gsKit_prim_sprite(gsGlobal, left + 12, top + line + 19,
+                    right - 12, top + line + 20, 13, edge);
+}
+
+static void drawFileManagerModalHelp(int left, int right, int bottom,
+                                     PromptBar help) {
+  int line = getFontLineHeight();
+  drawPromptBar(left + 14, bottom - line - 12, right - 14, bottom - 8, 14,
+                HeaderTextColor, help);
+}
+
+static void drawFileManagerWrapped(const char *text, int left, int top,
+                                   int right, int rows, uint64_t color) {
+  int line = getFontLineHeight();
+  for (int row = 0; row < rows && *text; row++) {
+    char fitted[PATH_MAX + 160];
+    if (row == rows - 1) {
+      fileManagerFitText(text, right - left, fitted, sizeof(fitted), 0);
+    } else {
+      size_t length = strlen(text), end = 0, word = 0;
+      while (end < length && end + 4 < sizeof(fitted)) {
+        size_t next = end + 1;
+        while (next < length && ((unsigned char)text[next] & 0xC0) == 0x80) next++;
+        memcpy(fitted, text, next); fitted[next] = '\0';
+        if ((int)getLineWidth(fitted) > right - left) break;
+        if (text[end] == ' ') word = end;
+        end = next;
+      }
+      if (end < length && word) end = word;
+      if (!end) return;
+      memcpy(fitted, text, end); fitted[end] = '\0';
+      text += end;
+      while (*text == ' ') text++;
+    }
+    drawTextWindow(left, top + row * line, right, top + (row + 1) * line,
+                   14, color, ALIGN_LEFT, fitted);
+  }
 }
 
 static void drawBrowserRow(int y, int selected, const char *name,
@@ -434,6 +516,40 @@ static int pathWithin(const char *path, const char *folder) {
 static void drawFileManagerSelection(int x1, int y, int x2,
                                      int lineHeight, int active);
 
+static void drawFileManagerList(const char *title, const char *subtitle,
+    const char *notice, int count, int selected,
+    int (*row)(int, char *, size_t, char *, size_t, CardArtType *, void *),
+    void *context, PromptBar help) {
+  int left = keepoutArea + 32, right = gsGlobal->Width - left;
+  int top = 62, bottom = gsGlobal->Height - 28;
+  int line = getFontLineHeight(), step = line + 8;
+  drawFileManagerModal(left, top, right, bottom, title);
+  char fitted[PATH_MAX + 160];
+  fileManagerFitText(subtitle, right - left - 32, fitted, sizeof(fitted), 1);
+  int y = top + line + 30;
+  drawTextWindow(left + 16, y, right - 16, y + line, 14,
+                 FontMainColor, ALIGN_LEFT, fitted);
+  y += line + 8;
+  drawFileManagerWrapped(notice, left + 16, y, right - 16, 2, HeaderTextColor);
+  y += 2 * line + 12;
+  int visible = (bottom - line - 28 - y) / step;
+  if (visible < 1) visible = 1;
+  int first = selected / visible * visible;
+  for (int i = first; i < count && i < first + visible; i++) {
+    char name[PATH_MAX + 16], detail[PATH_MAX + 16];
+    CardArtType art;
+    if (!row(i, name, sizeof(name), detail, sizeof(detail), &art, context)) continue;
+    int rowY = y + (i - first) * step;
+    if (i == selected) drawFileManagerSelection(left + 10, rowY, right - 10, line, 1);
+    fileManagerFitText(name, right - left - 36, fitted, sizeof(fitted), 0);
+    drawTextWindow(left + 18, rowY, right - 18, rowY + line, 14,
+                   i == selected ? ColorSelectedText : FontMainColor,
+                   ALIGN_LEFT, fitted);
+  }
+  drawFileManagerModalHelp(left, right, bottom, help);
+  presentBrowserFrame();
+}
+
 static int validFileName(const char *name) {
   return name[0] != '\0' && strcmp(name, ".") && strcmp(name, "..") &&
          strpbrk(name, "/\\:") == NULL;
@@ -448,43 +564,47 @@ static int editBrowserText(const char *title, char *name, size_t capacity,
   if (maxLength >= capacity)
     maxLength = capacity - 1;
   while (1) {
-    int left = keepoutArea + 30;
-    int right = gsGlobal->Width - left;
+    int left = keepoutArea + 24, right = gsGlobal->Width - left;
+    int line = getFontLineHeight();
+    int top = 54, bottom = gsGlobal->Height - 24;
     int length = strlen(name);
-    const char *visible = length > 42 ? name + length - 42 : name;
-    gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
-    drawBrowserSheet(1);
-    drawTextWindow(left, 22, right, 50, 0, HeaderTextColor,
-                   ALIGN_HCENTER, title);
-    gsKit_prim_sprite(gsGlobal, left, 73, right, 109, 3,
-                      glassPresetColor(0x18, 0x4A, 0x68, 0x52));
-    drawTextWindow(left + 10, 79, right - 10, 103, 0, FontMainColor,
-                   ALIGN_LEFT, visible);
+    char visible[FILE_MANAGER_NAME_MAX + 8];
+    fileManagerFitText(name, right - left - 40, visible, sizeof(visible), 1);
+    drawFileManagerModal(left, top, right, bottom, title);
+    int fieldTop = top + line + 32;
+    gsKit_prim_sprite(gsGlobal, left + 14, fieldTop, right - 14,
+                      fieldTop + line + 12, 14,
+                      glassPresetColor(0x06, 0x12, 0x22, 0x70));
+    drawTextWindow(left + 22, fieldTop + 6, right - 22,
+                   fieldTop + 6 + line, 15, FontMainColor, ALIGN_LEFT, visible);
+    int gridTop = fieldTop + line + 26;
+    int step = (bottom - gridTop - 3 * line - 24) / 4;
+    int cell = (right - left - 28) / 10;
     for (int index = 0; index < 40; index++) {
-      int x = left + 8 + (index % 10) * ((right - left - 16) / 10);
-      int y = 127 + (index / 10) * 54;
+      int x = left + 14 + (index % 10) * cell;
+      int y = gridTop + (index / 10) * step;
       char label[3] = {keys[index], '\0', '\0'};
-      if (label[0] == ' ')
-        snprintf(label, sizeof(label), "SP");
+      if (label[0] == ' ') snprintf(label, sizeof(label), "SP");
       else if (lowerCase && label[0] >= 'A' && label[0] <= 'Z')
         label[0] += 'a' - 'A';
       if (index == selected)
-        drawFileManagerSelection(x - 2, y, x + 42, 29, 1);
-      drawTextWindow(x, y, x + 40, y + 29, 0, FontMainColor,
+        drawFileManagerSelection(x + 1, y, x + cell - 3, line, 1);
+      drawTextWindow(x, y, x + cell, y + line, 15,
+                     index == selected ? ColorSelectedText : FontMainColor,
                      ALIGN_CENTER, label);
     }
-    drawTextWindow(left + 8, 351, right - 8, 379, 0, ErrorTextColor,
-                   ALIGN_LEFT, message);
+    char fitted[128];
+    fileManagerFitText(message, right - left - 28, fitted, sizeof(fitted), 0);
+    drawTextWindow(left + 14, bottom - 3 * line - 20, right - 14,
+                   bottom - 2 * line - 20, 15, ErrorTextColor, ALIGN_LEFT, fitted);
     const ButtonPrompt edit[] = {
-        {ICON_DPAD, lunaText("Pick")}, {ICON_CROSS, lunaText("Type")},
-        {ICON_SQUARE, lunaText("Space")}, {ICON_TRIANGLE, lunaText("Delete")}};
-    const ButtonPrompt actions[] = {
-        {ICON_R1, lunaText("Case")}, {ICON_START, lunaText("Save")},
-        {ICON_CIRCLE, lunaText("Cancel")}};
-    drawPromptBar(left + 8, 385, right - 8, 411, 0,
-                  HeaderTextColor, (PromptBar){NULL, edit, 4});
-    drawPromptBar(left + 8, 411, right - 8, gsGlobal->Height - 8, 0,
-                  HeaderTextColor, (PromptBar){NULL, actions, 3});
+        {ICON_CROSS, lunaText("Type")}, {ICON_SQUARE, lunaText("Space")},
+        {ICON_TRIANGLE, lunaText("Delete")}, {ICON_R1, lunaText("Case")}};
+    drawPromptBar(left + 14, bottom - 2 * line - 16, right - 14,
+                  bottom - line - 16, 15, HeaderTextColor,
+                  (PromptBar){NULL, edit, 4});
+    drawFileManagerModalHelp(left, right, bottom, PROMPT_TWO(
+        ICON_START, lunaText("Save"), ICON_CIRCLE, lunaText("Cancel")));
     presentBrowserFrame();
     int input = waitForInput(-1);
     if (input & PAD_CIRCLE)
@@ -496,8 +616,11 @@ static int editBrowserText(const char *title, char *name, size_t capacity,
       snprintf(message, sizeof(message), lunaText("Enter a valid name (%u characters max)."),
                (unsigned)maxLength);
     } else if (input & PAD_TRIANGLE) {
-      if (length > 0)
-        name[length - 1] = '\0';
+      if (length > 0) {
+        length--;
+        while (length > 0 && ((unsigned char)name[length] & 0xC0) == 0x80) length--;
+        name[length] = '\0';
+      }
       message[0] = '\0';
     } else if (input & PAD_R1) {
       lowerCase = !lowerCase;
@@ -540,6 +663,16 @@ static void formatBytes(uint64_t bytes, char *text, size_t size) {
     snprintf(text, size, lunaText("%llu bytes"), (unsigned long long)bytes);
 }
 
+static void fileManagerItemSummary(int count, int transfer, int move,
+                                    char *text, size_t size) {
+  const char *single = !transfer ? "1 item" :
+      move ? "1 item ready to move" : "1 item ready to copy";
+  const char *multiple = !transfer ? "%d items" :
+      move ? "%d items ready to move" : "%d items ready to copy";
+  if (count == 1) snprintf(text, size, "%s", lunaText(single));
+  else snprintf(text, size, lunaText(multiple), count);
+}
+
 static int getAvailableSpace(const char *root, uint64_t *bytes) {
   if (!strncmp(root, "pfs", 3)) {
     int zones = fileXioDevctl("pfs0:", PDIOC_ZONEFREE, NULL, 0, NULL, 0);
@@ -563,14 +696,14 @@ static int getAvailableSpace(const char *root, uint64_t *bytes) {
 }
 
 static void showFileDetails(const BrowserRoot *roots, int rootCount,
-                            const BrowserPane *pane) {
+                            const BrowserPane *pane, int folder) {
   char path[PATH_MAX + 1];
   const char *kind = lunaText("Drive");
   int root = pane->root < 0 ? pane->rootSelected : pane->root;
   if (root < 0 || root >= rootCount)
     return;
   snprintf(path, sizeof(path), "%s", roots[root].path);
-  if (pane->root >= 0 && pane->visibleCount > 0) {
+  if (!folder && pane->root >= 0 && pane->visibleCount > 0) {
     if (!joinPath(path, sizeof(path), pane->path,
                   browserPaneEntry(pane, pane->selected)->name))
       return;
@@ -593,45 +726,68 @@ static void showFileDetails(const BrowserRoot *roots, int rootCount,
   else
     snprintf(freeText, sizeof(freeText), lunaText("Unavailable on this drive"));
   int scroll = 0;
-  int lines = ((int)strlen(path) + 41) / 42;
+  int line = getFontLineHeight();
+  int left = keepoutArea + 42, right = gsGlobal->Width - left;
+  int top = 56, bottom = gsGlobal->Height - 28;
+  // Wrap on measured UTF-8 boundaries; paths remain readable at every font size.
+  size_t offsets[PATH_MAX + 2];
+  int lines = 0;
+  size_t offset = 0, length = strlen(path);
+  while (offset < length) {
+    offsets[lines++] = offset;
+    size_t end = offset;
+    char segment[PATH_MAX + 1];
+    do {
+      size_t next = end + 1;
+      while (next < length && ((unsigned char)path[next] & 0xC0) == 0x80) next++;
+      memcpy(segment, path + offset, next - offset);
+      segment[next - offset] = '\0';
+      if (end > offset && (int)getLineWidth(segment) > right - left - 32) break;
+      end = next;
+    } while (end < length);
+    offset = end;
+  }
+  offsets[lines] = length;
+  int pathTop = top + 7 * line + 44;
+  int visible = (bottom - line - 24 - pathTop) / line;
+  if (visible < 1) visible = 1;
   while (1) {
-    int left = keepoutArea + 30;
-    int right = gsGlobal->Width - left;
-    gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
-    drawBrowserSheet(1);
-    drawTextWindow(left, 22, right, 50, 0, HeaderTextColor,
-                   ALIGN_HCENTER, lunaText("File details"));
-    drawTextWindow(left + 8, 68, right - 8, 94, 0, FontMainColor,
-                   ALIGN_LEFT, kind);
-    drawTextWindow(left + 8, 102, right - 8, 128, 0, HeaderTextColor,
-                   ALIGN_LEFT, lunaText("SIZE"));
-    drawTextWindow(left + 8, 129, right - 8, 155, 0, FontMainColor,
-                   ALIGN_LEFT, sizeText);
-    drawTextWindow(left + 8, 163, right - 8, 189, 0, HeaderTextColor,
-                   ALIGN_LEFT, lunaText("AVAILABLE SPACE"));
-    drawTextWindow(left + 8, 190, right - 8, 216, 0, FontMainColor,
-                   ALIGN_LEFT, freeText);
-    drawTextWindow(left + 8, 224, right - 8, 250, 0, HeaderTextColor,
-                   ALIGN_LEFT, lunaText("FULL PATH"));
-    for (int row = 0; row < 5 && scroll + row < lines; row++) {
-      char segment[43];
-      int offset = (scroll + row) * 42;
-      snprintf(segment, sizeof(segment), "%s", path + offset);
-      drawTextWindow(left + 8, 254 + row * 25, right - 8,
-                     279 + row * 25, 0, FontMainColor, ALIGN_LEFT, segment);
+    drawFileManagerModal(left, top, right, bottom, lunaText("File details"));
+    int y = top + line + 28;
+    char fitted[128];
+    drawTextWindow(left + 16, y, right - 16, y + line, 14,
+                   ColorSelectedText, ALIGN_LEFT, kind);
+    y += line + 8;
+    drawTextWindow(left + 16, y, right - 16, y + line, 14,
+                   HeaderTextColor, ALIGN_LEFT, lunaText("SIZE"));
+    fileManagerFitText(sizeText, right - left - 32, fitted, sizeof(fitted), 0);
+    drawTextWindow(left + 16, y + line, right - 16, y + 2 * line, 14,
+                   FontMainColor, ALIGN_LEFT, fitted);
+    y += 2 * line + 4;
+    drawTextWindow(left + 16, y, right - 16, y + line, 14,
+                   HeaderTextColor, ALIGN_LEFT, lunaText("AVAILABLE SPACE"));
+    fileManagerFitText(freeText, right - left - 32, fitted, sizeof(fitted), 0);
+    drawTextWindow(left + 16, y + line, right - 16, y + 2 * line, 14,
+                   FontMainColor, ALIGN_LEFT, fitted);
+    y += 2 * line + 4;
+    drawTextWindow(left + 16, y, right - 16, y + line, 14,
+                   HeaderTextColor, ALIGN_LEFT, lunaText("FULL PATH"));
+    for (int row = 0; row < visible && scroll + row < lines; row++) {
+      char segment[PATH_MAX + 1];
+      size_t start = offsets[scroll + row];
+      size_t count = offsets[scroll + row + 1] - start;
+      memcpy(segment, path + start, count); segment[count] = '\0';
+      drawTextWindow(left + 16, pathTop + row * line, right - 16,
+                     pathTop + (row + 1) * line, 14,
+                     FontMainColor, ALIGN_LEFT, segment);
     }
-    const ButtonPrompt help[] = {
-        {ICON_DPAD, lunaText("Scroll path")}, {ICON_CIRCLE, lunaText("Back")}};
-    drawPromptBar(left + 8, 391, right - 8, gsGlobal->Height - 8, 0,
-                  HeaderTextColor, (PromptBar){NULL, help, 2});
+    drawFileManagerModalHelp(left, right, bottom, PROMPT_TWO(
+        ICON_DPAD, lunaText("Scroll path"), ICON_CIRCLE, lunaText("Back")));
     presentBrowserFrame();
     int input = waitForInput(-1);
-    if (input & (PAD_CIRCLE | PAD_TRIANGLE))
-      return;
-    if ((input & PAD_DOWN) && scroll + 5 < lines)
-      scroll++;
-    if ((input & PAD_UP) && scroll > 0)
-      scroll--;
+    if (input & (PAD_CIRCLE | PAD_TRIANGLE)) return;
+    if ((input & PAD_DOWN) && scroll + visible < lines) scroll++;
+    if ((input & PAD_UP) && scroll > 0) scroll--;
   }
 }
 
@@ -656,77 +812,149 @@ enum FileAction {
   FILE_ACTION_LAUNCH_ELF,
 };
 
+enum {
+  FILE_ACTION_OPEN = FILE_ACTION_LAUNCH_ELF + 1,
+  FILE_ACTION_COPY_ITEM, FILE_ACTION_MOVE_ITEM,
+  FILE_ACTION_FOLDER_MENU, FILE_ACTION_SORT_MENU, FILE_ACTION_SELECTION_MENU,
+  FILE_ACTION_CLEAR_QUEUE, FILE_ACTION_COPY_MARKED, FILE_ACTION_MOVE_MARKED,
+  FILE_ACTION_FOLDER_DETAILS
+};
+
 typedef struct {
-  enum FileAction actions[20];
+  int actions[12];
   int count;
 } FileActionMenu;
 
-static int fileActionRow(int index, char *name, size_t nameSize,
-                         char *detail, size_t detailSize,
-                         CardArtType *cardArt, void *context) {
-  const FileActionMenu *menu = context;
+static const char *fileActionLabel(int action) {
   static const char *const labels[] = {
       "Details", "Rename", "New folder", "Move here", "Paste here",
-      "Delete selected item", "Delete marked items", "Refresh folder", "Filter names",
-      "Clear filter", "Sort: name", "Sort: size (largest first)",
-      "Sort: date (newest first)", "Mark all listed items", "Invert listed marks",
-      "Review tray", "View as text", "Launch ELF"};
-  const char *label = lunaText(labels[menu->actions[index]]);
-  snprintf(name, nameSize, "%s", label);
-  detail[0] = '\0';
-  *cardArt = CARD_ART_NONE;
-  (void)detailSize;
-  return 1;
+      "Delete", "Delete marked items", "Refresh folder", "Filter names",
+      "Clear filter", "Name", "Size", "Date",
+      "Mark all listed items", "Invert listed marks", "Review tray",
+      "View as text", "Launch ELF", "Open", "Copy", "Move",
+      "Folder options", "Sort by", "Selection", "Clear tray", "Copy", "Move", "Folder details"};
+  return lunaText(labels[action]);
 }
 
-static int chooseFileAction(const BrowserPane *pane, const CopyQueue *queue) {
-  FileActionMenu menu = {0};
-  menu.actions[menu.count++] = FILE_ACTION_DETAILS;
-  if (queue->count > 0) {
-    if (pane->root >= 0) {
-      menu.actions[menu.count++] = FILE_ACTION_COPY;
-      menu.actions[menu.count++] = FILE_ACTION_MOVE;
-    }
-    menu.actions[menu.count++] = FILE_ACTION_QUEUE;
-  }
-  if (pane->root >= 0 && pane->visibleCount > 0 && !pane->scanning) {
-    const BrowserEntry *entry = browserPaneEntry(pane, pane->selected);
-    if (!entry->isDirectory) {
-      if (lunaFileKind(entry->name) == LUNA_FILE_ELF)
-        menu.actions[menu.count++] = FILE_ACTION_LAUNCH_ELF;
-      menu.actions[menu.count++] = FILE_ACTION_VIEW_TEXT;
-    }
-    menu.actions[menu.count++] = FILE_ACTION_RENAME;
-    menu.actions[menu.count++] = FILE_ACTION_DELETE;
-    menu.actions[menu.count++] = FILE_ACTION_MARK_ALL;
-    menu.actions[menu.count++] = FILE_ACTION_INVERT;
-  }
-  if (pane->root >= 0 && !pane->scanning) {
-    menu.actions[menu.count++] = FILE_ACTION_NEW_FOLDER;
-    menu.actions[menu.count++] = FILE_ACTION_FILTER;
-    if (pane->filter[0]) menu.actions[menu.count++] = FILE_ACTION_CLEAR_FILTER;
-    menu.actions[menu.count++] = FILE_ACTION_SORT_NAME;
-    menu.actions[menu.count++] = FILE_ACTION_SORT_SIZE;
-    menu.actions[menu.count++] = FILE_ACTION_SORT_DATE;
-    menu.actions[menu.count++] = FILE_ACTION_REFRESH;
-  }
-  // Delete marked items is offered separately from deleting the highlighted row.
-  if (queue->count > 0)
-    menu.actions[menu.count++] = FILE_ACTION_DELETE_MARKED;
+// Menus remain anchored to the selected row, including on the last visible row.
+static int chooseFileAction(const BrowserPane *pane, const CopyQueue *queue,
+                            int folderMenu) {
+  int page = folderMenu ? FILE_ACTION_FOLDER_MENU : 0;
   int selected = 0;
+  int saved[2] = {0, 0};
+  const BrowserEntry *entry = pane->root >= 0 ?
+      browserPaneEntry(pane, pane->selected) : NULL;
   while (1) {
-    drawBrowserFrame(lunaText("File Explorer"), lunaText("Actions"), lunaText("Choose an action."),
-                     PROMPT_TWO(ICON_CROSS, lunaText("Select"), ICON_CIRCLE, lunaText("Back")),
-                     menu.count, selected, browserFirstRow(selected), 0, fileActionRow, &menu);
+    FileActionMenu menu = {0};
+    const char *title = entry ? entry->name : pane->root < 0 &&
+        pane->rootSelected < fileManagerScene.rootCount ?
+        fileManagerScene.roots[pane->rootSelected].label : lunaText("Folder");
+    if (!page) {
+      if (pane->root < 0 && fileManagerScene.rootCount > 0)
+        menu.actions[menu.count++] = FILE_ACTION_OPEN;
+      if (entry && !pane->scanning) {
+        menu.actions[menu.count++] = FILE_ACTION_OPEN;
+        menu.actions[menu.count++] = FILE_ACTION_COPY_ITEM;
+        menu.actions[menu.count++] = FILE_ACTION_MOVE_ITEM;
+        menu.actions[menu.count++] = FILE_ACTION_RENAME;
+        if (!entry->isDirectory && lunaFileKind(entry->name) != LUNA_FILE_TEXT)
+          menu.actions[menu.count++] = FILE_ACTION_VIEW_TEXT;
+      }
+      menu.actions[menu.count++] = FILE_ACTION_DETAILS;
+      if (pane->root >= 0) menu.actions[menu.count++] = FILE_ACTION_FOLDER_MENU;
+      if (queue->count) menu.actions[menu.count++] = FILE_ACTION_SELECTION_MENU;
+      if (entry && !pane->scanning) menu.actions[menu.count++] = FILE_ACTION_DELETE;
+    } else if (page == FILE_ACTION_FOLDER_MENU) {
+      title = lunaText("Folder options");
+      if (queue->count && pane->root >= 0)
+        menu.actions[menu.count++] = fileManagerScene.move && *fileManagerScene.move ?
+            FILE_ACTION_MOVE : FILE_ACTION_COPY;
+      if (pane->root >= 0 && !pane->scanning) {
+        menu.actions[menu.count++] = FILE_ACTION_NEW_FOLDER;
+        menu.actions[menu.count++] = FILE_ACTION_SORT_MENU;
+        menu.actions[menu.count++] = FILE_ACTION_FILTER;
+        if (pane->filter[0]) menu.actions[menu.count++] = FILE_ACTION_CLEAR_FILTER;
+        menu.actions[menu.count++] = FILE_ACTION_REFRESH;
+        if (pane->visibleCount || queue->count)
+          menu.actions[menu.count++] = FILE_ACTION_SELECTION_MENU;
+      }
+      menu.actions[menu.count++] = FILE_ACTION_FOLDER_DETAILS;
+    } else if (page == FILE_ACTION_SORT_MENU) {
+      title = lunaText("Sort by");
+      menu.actions[menu.count++] = FILE_ACTION_SORT_NAME;
+      menu.actions[menu.count++] = FILE_ACTION_SORT_SIZE;
+      menu.actions[menu.count++] = FILE_ACTION_SORT_DATE;
+    } else {
+      title = lunaText("Selection");
+      if (pane->root >= 0 && !pane->scanning && pane->visibleCount) {
+        menu.actions[menu.count++] = FILE_ACTION_MARK_ALL;
+        menu.actions[menu.count++] = FILE_ACTION_INVERT;
+      }
+      if (queue->count) {
+        menu.actions[menu.count++] = FILE_ACTION_COPY_MARKED;
+        menu.actions[menu.count++] = FILE_ACTION_MOVE_MARKED;
+        menu.actions[menu.count++] = FILE_ACTION_QUEUE;
+        menu.actions[menu.count++] = FILE_ACTION_CLEAR_QUEUE;
+        menu.actions[menu.count++] = FILE_ACTION_DELETE_MARKED;
+      }
+    }
+    if (!menu.count) return -1;
+    if (selected >= menu.count) selected = menu.count - 1;
+    int left = keepoutArea + 10, right = gsGlobal->Width - left;
+    int width = (right - left) * 3 / 5;
+    int line = getFontLineHeight(), step = line + 8;
+    int maxRows = (gsGlobal->Height - 48 - 2 * line - 48) / step;
+    if (maxRows < 1) maxRows = 1;
+    int rows = menu.count < maxRows ? menu.count : maxRows;
+    int height = 2 * line + 48 + rows * step;
+    FileManagerLayout layout = fileManagerLayout();
+    int focus = pane->root < 0 ? pane->rootSelected : pane->selected;
+    int top = layout.listTop + (focus % layout.visible) * layout.rowStep - 8;
+    if (top + height > gsGlobal->Height - 24) top = gsGlobal->Height - 24 - height;
+    if (top < 24) top = 24;
+    int x = right - width - 12, bottom = top + height;
+    drawFileManagerModal(x, top, x + width, bottom, title);
+    int first = selected >= rows ? selected - rows + 1 : 0;
+    for (int i = first; i < menu.count && i < first + rows; i++) {
+      int y = top + line + 30 + (i - first) * step;
+      int action = menu.actions[i];
+      if (i == selected) drawFileManagerSelection(x + 8, y, x + width - 8, line, 1);
+      int submenu = action == FILE_ACTION_FOLDER_MENU ||
+          action == FILE_ACTION_SORT_MENU || action == FILE_ACTION_SELECTION_MENU;
+      char label[160];
+      fileManagerFitText(fileActionLabel(action), width - 44, label, sizeof(label), 0);
+      uint64_t color = action == FILE_ACTION_DELETE || action == FILE_ACTION_DELETE_MARKED ?
+          ErrorTextColor : i == selected ? ColorSelectedText : FontMainColor;
+      drawTextWindow(x + 16, y, x + width - 28, y + line, 14, color, ALIGN_LEFT, label);
+      const char *detail = submenu ? ">" :
+          page == FILE_ACTION_SORT_MENU && action - FILE_ACTION_SORT_NAME == (int)pane->sort ? "*" : "";
+      drawTextWindow(x + width - 28, y, x + width - 14, y + line, 14,
+                     HeaderTextColor, ALIGN_RIGHT, detail);
+    }
+    drawFileManagerModalHelp(x, x + width, bottom, PROMPT_TWO(
+        ICON_CROSS, lunaText("Select"), ICON_CIRCLE, lunaText("Back")));
+    presentBrowserFrame();
     int input = waitForInput(-1);
-    if (input & (PAD_CIRCLE | PAD_TRIANGLE))
-      return -1;
-    if (input & PAD_UP)
-      selected = (selected + menu.count - 1) % menu.count;
-    else if (input & PAD_DOWN)
-      selected = (selected + 1) % menu.count;
-    else if (input & PAD_CROSS)
-      return menu.actions[selected];
+    if (input & PAD_TRIANGLE) return -1;
+    if (input & (PAD_CIRCLE | PAD_LEFT)) {
+      if (!page || (folderMenu && page == FILE_ACTION_FOLDER_MENU)) return -1;
+      if (page == FILE_ACTION_SORT_MENU ||
+          (page == FILE_ACTION_SELECTION_MENU && saved[1] >= 0)) {
+        page = FILE_ACTION_FOLDER_MENU; selected = saved[1];
+      } else { page = 0; selected = saved[0]; }
+    } else if (input & PAD_UP) selected = (selected + menu.count - 1) % menu.count;
+    else if (input & PAD_DOWN) selected = (selected + 1) % menu.count;
+    else if (input & (PAD_CROSS | PAD_RIGHT)) {
+      int action = menu.actions[selected];
+      if (action == FILE_ACTION_FOLDER_MENU || action == FILE_ACTION_SORT_MENU ||
+          action == FILE_ACTION_SELECTION_MENU) {
+        if (!page) { saved[0] = selected; saved[1] = -1; }
+        else if (page == FILE_ACTION_FOLDER_MENU) saved[1] = selected;
+        page = action; selected = 0;
+      } else if (input & PAD_CROSS) {
+        return action;
+      }
+    }
   }
 }
 
@@ -816,30 +1044,19 @@ static void createPaneFolder(BrowserPane *pane, const BrowserRoot *roots,
 }
 
 static void drawFileManagerPane(int x1, int y1, int x2, int y2, int active) {
-  uint64_t fill = glassPresetColor(0x0C, 0x25, 0x3A,
-                                   active ? 0x22 : 0x11);
-  uint64_t edge = glassPresetColor(0x62, 0xB8, 0xD8,
-                                   active ? 0x58 : 0x22);
-  gsKit_prim_sprite(gsGlobal, x1, y1, x2, y2, 3, fill);
-  gsKit_prim_sprite(gsGlobal, x1, y1, x2, y1 + 2, 4, edge);
-  gsKit_prim_sprite(gsGlobal, x1, y1, x1 + 1, y2, 4, edge);
-  gsKit_prim_sprite(gsGlobal, x2 - 1, y1, x2, y2, 4, edge);
-  gsKit_prim_sprite(gsGlobal, x1, y2 - 1, x2, y2, 4, edge);
+  gsKit_prim_sprite(gsGlobal, x1, y1, x2, y2, 3,
+                    glassPresetColor(0x08, 0x19, 0x2C, active ? 0x38 : 0x24));
+  gsKit_prim_sprite(gsGlobal, x1, y1, x2, y1 + 1, 4,
+                    glassPresetColor(0x78, 0x9A, 0xB0, 0x30));
 }
 
 static void drawFileManagerSelection(int x1, int y, int x2,
                                      int lineHeight, int active) {
-  uint64_t fill = glassPresetColor(0x16, 0x56, 0x78,
-                                   active ? 0x48 : 0x20);
-  gsKit_prim_sprite(gsGlobal, x1, y - 2, x2, y + lineHeight + 2, 4, fill);
-  if (active) {
-    uint64_t edge = glassPresetColor(0x7C, 0xD8, 0xF0, 0x70);
-    gsKit_prim_sprite(gsGlobal, x1, y - 2, x1 + 3,
-                      y + lineHeight + 2, 5, edge);
-    gsKit_prim_sprite(gsGlobal, x1, y - 2, x2, y - 1, 5, edge);
-    gsKit_prim_sprite(gsGlobal, x1, y + lineHeight + 1,
-                      x2, y + lineHeight + 2, 5, edge);
-  }
+  gsKit_prim_sprite(gsGlobal, x1, y - 3, x2, y + lineHeight + 3, 4,
+                    glassPresetColor(0x26, 0x61, 0x88, active ? 0x60 : 0x24));
+  if (active)
+    gsKit_prim_sprite(gsGlobal, x1, y - 3, x1 + 2, y + lineHeight + 3, 5,
+                      glassPresetColor(0xA0, 0xDA, 0xF0, 0x78));
 }
 
 static void drawFileManagerItemIcon(int x, int y, int root, int directory,
@@ -876,14 +1093,10 @@ static void drawFileManagerFooter(int left, int right, PromptBar footer) {
     return;
   }
   const ButtonPrompt controls[] = {
-      {ICON_CROSS, lunaText("Open")}, {ICON_TRIANGLE, lunaText("Up")},
-      {ICON_L1, lunaText("Drives")}, {ICON_SQUARE, lunaText("Mark")},
-      {ICON_R1, lunaText("Tray")}, {ICON_R2, lunaText("More")}};
-  int middle = (top + bottom) / 2;
-  drawPromptBar(left + 8, top + 3, right - 8, middle, 0,
-                HeaderTextColor, (PromptBar){NULL, controls, 3});
-  drawPromptBar(left + 8, middle, right - 8, bottom - 2, 0,
-                HeaderTextColor, (PromptBar){NULL, controls + 3, 3});
+      {ICON_CROSS, lunaText("Open")}, {ICON_SQUARE, lunaText("Select")},
+      {ICON_TRIANGLE, lunaText("Options")}, {ICON_CIRCLE, lunaText("Back")}};
+  drawPromptBar(left + 8, top + 6, right - 8, bottom, 0,
+                HeaderTextColor, (PromptBar){NULL, controls, 4});
 }
 
 
@@ -969,7 +1182,7 @@ static int fileManagerTrayWidth(int target) {
   return width;
 }
 
-static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
+static void drawFileManagerContents(const BrowserRoot *roots, int rootCount,
                                  const BrowserPane *browser, const CopyQueue *queue,
                                  int trayCollapsed, const char *status, PromptBar footer,
                                  int progressPercent) {
@@ -989,25 +1202,50 @@ static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
   drawTextWindow(left, headerHeight - line, right, headerHeight + 2,
                  0, HeaderTextColor, ALIGN_HCENTER, lunaText("File Explorer"));
   drawFileManagerPane(left, layout.paneTop, browserRight, layout.paneBottom, 1);
-  if (browser->root < 0) snprintf(text, sizeof(text), "%s", lunaText("Drives"));
-  else {
-    const char *relative = browser->path;
-    size_t rootLength = strlen(roots[browser->root].path);
-    if (!strncmp(relative, roots[browser->root].path, rootLength)) relative += rootLength;
+  // A quiet parent trail and a stronger current folder form one location header.
+  const char *folder = lunaText("Drives");
+  text[0] = '\0';
+  if (browser->root >= 0) {
+    const char *relative = browser->path + strlen(roots[browser->root].path);
     while (*relative == '/') relative++;
-    snprintf(text, sizeof(text), "%s /%s", roots[browser->root].label, relative);
+    char path[PATH_MAX + 1];
+    snprintf(path, sizeof(path), "%s", relative);
+    size_t length = strlen(path);
+    while (length && path[length - 1] == '/') path[--length] = '\0';
+    const char *last = strrchr(path, '/');
+    if (length) {
+      // folder points into text's separate storage below after parent fitting.
+      snprintf(fitted, sizeof(fitted), "%s", last ? last + 1 : path);
+      if (last) path[last - path] = '\0'; else path[0] = '\0';
+      snprintf(text, sizeof(text), "%s%s%s", roots[browser->root].label,
+               path[0] ? "  >  " : "", path);
+    } else {
+      snprintf(fitted, sizeof(fitted), "%s", roots[browser->root].label);
+      snprintf(text, sizeof(text), "%s", lunaText("Drives"));
+    }
+    char trail[PATH_MAX + 160], current[PATH_MAX + 160];
+    snprintf(current, sizeof(current), "%s", fitted);
+    // Convert parent separators into a readable, font-safe breadcrumb trail.
+    for (char *c = text; *c; c++) if (*c == '/') *c = '>';
+    fileManagerFitText(text, x2 - x1, trail, sizeof(trail), 1);
+    drawTextWindow(x1 + 4, layout.paneTop + 7, x2 - 4,
+                   layout.paneTop + 7 + line, 5, HeaderTextColor, ALIGN_LEFT, trail);
+    fileManagerFitText(current, x2 - x1, fitted, sizeof(fitted), 0);
+    folder = fitted;
   }
-  // One location header; no repeated device, source/destination, or row counters.
-  fileManagerFitText(text, x2 - x1, fitted, sizeof(fitted), 1);
-  drawTextWindow(x1, layout.paneTop + 8, x2, layout.paneTop + 8 + line, 5,
-                 FontMainColor, ALIGN_LEFT, fitted);
+  drawTextWindow(x1 + 4, layout.paneTop + line + 10, x2 - 4,
+                 layout.paneTop + 2 * line + 10, 5,
+                 FontMainColor, ALIGN_LEFT, folder);
+  gsKit_prim_sprite(gsGlobal, x1, layout.listTop - 9, x2,
+                    layout.listTop - 8, 4,
+                    glassPresetColor(0x78, 0x9A, 0xB0, 0x24));
   for (int index = first; index < total && index < first + layout.visible; index++) {
     char name[PATH_MAX + 16], detail[48] = "";
     int y = layout.listTop + (index - first) * layout.rowStep;
     int isRoot = browser->root < 0, directory = 0, marked = 0;
     if (isRoot) {
       snprintf(name, sizeof(name), "%s", roots[index].label);
-      snprintf(detail, sizeof(detail), "%s", roots[index].path);
+      snprintf(detail, sizeof(detail), "%s", lunaText("Drive"));
     } else {
       const BrowserEntry *entry = browserPaneEntry(browser, index);
       directory = entry->isDirectory;
@@ -1016,13 +1254,15 @@ static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
                queueFind(queue, path) >= 0;
       snprintf(name, sizeof(name), "%s", entry->name);
       if (!directory && entry->hasSize)
-        snprintf(detail, sizeof(detail), "%llu K",
-                 (unsigned long long)((entry->size + 1023) / 1024));
+        snprintf(detail, sizeof(detail), entry->size >= 1048576 ? "%llu MB" : "%llu KB",
+                 (unsigned long long)(entry->size >= 1048576 ?
+                   entry->size / 1048576 : (entry->size + 1023) / 1024));
     }
     if (index == selected)
       drawFileManagerSelection(x1 - 4, y, x2 + 4, line, 1);
-    if (!isRoot) drawFileManagerMark(x1, y + (line - 12) / 2, marked);
-    drawFileManagerItemIcon(x1 + (isRoot ? 0 : 20), y, isRoot, directory, 1);
+    if (!isRoot && (marked || index == selected))
+      drawFileManagerMark(x1, y + (line - 12) / 2, marked);
+    drawFileManagerItemIcon(x1 + (isRoot ? 0 : 20), y, isRoot, directory, index == selected);
     int nameLeft = x1 + (isRoot ? 23 : 43);
     int detailWidth = detail[0] ? (int)getLineWidth(detail) + 10 : 0;
     if (detailWidth > (x2 - nameLeft) / 3) { detail[0] = '\0'; detailWidth = 0; }
@@ -1032,7 +1272,7 @@ static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
                    ALIGN_LEFT, fitted);
     if (detail[0])
       drawTextWindow(x2 - detailWidth, y, x2, y + line, 5,
-                     FontMainColor, ALIGN_RIGHT, detail);
+                     HeaderTextColor, ALIGN_RIGHT, detail);
   }
   if (!total && !browser->scanning)
     drawTextWindow(x1 + 4, layout.listTop, x2, layout.listTop + line, 5,
@@ -1043,10 +1283,11 @@ static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
     // Avoid squeezing text while the drawer is entering or leaving.
     if (trayWidth >= target && trayWidth >= 90 && queue->count) {
       int tx1 = trayLeft + 10, tx2 = right - 10, y = layout.paneTop + 8;
-      fileManagerFitText(lunaText("Copy tray"), tx2 - tx1, fitted, sizeof(fitted), 0);
+      fileManagerFitText(lunaText("Selected items"), tx2 - tx1, fitted, sizeof(fitted), 0);
       drawTextWindow(tx1, y, tx2, y + line, 5, FontMainColor, ALIGN_LEFT, fitted);
       y += line + 5;
-      fileManagerFitText(lunaText("Ready to copy"), tx2 - tx1, fitted, sizeof(fitted), 0);
+      fileManagerFitText(fileManagerScene.move && *fileManagerScene.move ?
+          lunaText("Ready to move") : lunaText("Ready to copy"), tx2 - tx1, fitted, sizeof(fitted), 0);
       drawTextWindow(tx1, y, tx2, y + line, 5, HeaderTextColor, ALIGN_LEFT, fitted);
       y += line + 12;
       int visible = (layout.paneBottom - line - 12 - y) / layout.rowStep;
@@ -1067,17 +1308,19 @@ static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
       }
     }
   }
-  // One selection/action strip. R1 restores the full-width browser.
   int actionLeft = right - (right - left) * 2 / 5;
-  if (queue->count)
-    snprintf(text, sizeof(text), lunaText("%d items selected"), queue->count);
-  else snprintf(text, sizeof(text), "%s", lunaText("Select files to copy."));
+  fileManagerItemSummary(queue->count ? queue->count : total, queue->count > 0,
+      fileManagerScene.move && *fileManagerScene.move, text, sizeof(text));
   fileManagerFitText(text, actionLeft - left - 18, fitted, sizeof(fitted), 0);
   drawTextWindow(left + 8, layout.summaryTop, actionLeft - 10,
-                 layout.summaryTop + line, 5, FontMainColor, ALIGN_LEFT, fitted);
-  if (progressPercent < 0 && footer.count == 0 && queue->count && browser->root >= 0)
+                 layout.summaryTop + line, 5, HeaderTextColor, ALIGN_LEFT, fitted);
+  if (progressPercent < 0 && footer.count == 0 && queue->count) {
+    const ButtonPrompt ready[] = {
+        {ICON_R1, lunaText("Tray")}, {ICON_START,
+         fileManagerScene.move && *fileManagerScene.move ? lunaText("Move here") : lunaText("Paste here")}};
     drawPromptBar(actionLeft, layout.summaryTop, right - 8, layout.summaryTop + line,
-                   5, ColorSelectedText, PROMPT_ONE(ICON_START, lunaText("Paste here")));
+                   5, HeaderTextColor, (PromptBar){NULL, ready, browser->root >= 0 ? 2 : 1});
+  }
   const char *message = status;
   if (progressPercent < 0 && footer.count == 0) {
     if (browser->root >= 0 && browser->truncated)
@@ -1091,9 +1334,7 @@ static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
       message = text;
     }
   }
-  if (!message || !*message)
-    message = queue->count ? lunaText("Browse to the destination. R1 shows or hides the tray.") :
-                            lunaText("Square selects files. L1 opens drives.");
+  if (!message) message = "";
   fileManagerFitText(message, right - left - 16, fitted, sizeof(fitted), 0);
   drawTextWindow(left + 8, layout.statusTop, right - 8, layout.statusTop + line, 5,
                  FontMainColor, ALIGN_LEFT, fitted);
@@ -1108,6 +1349,13 @@ static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
                         glassPresetColor(0x7C, 0xD8, 0xF0, 0x70));
   }
   drawFileManagerFooter(left, right, footer);
+}
+
+static void drawFileManagerFrame(const BrowserRoot *roots, int rootCount,
+    const BrowserPane *browser, const CopyQueue *queue, int trayCollapsed,
+    const char *status, PromptBar footer, int progressPercent) {
+  drawFileManagerContents(roots, rootCount, browser, queue, trayCollapsed,
+                         status, footer, progressPercent);
   presentBrowserFrame();
 }
 
@@ -1186,7 +1434,7 @@ static int measureTree(const char *source, int depth, CopyProgress *progress) {
       item = readdir(directory);
       if (!item) {
         int failed = errno != 0;
-        if (closedir(directory)) failed = 1;
+        if (closedir(directory) < 0) failed = 1;
         return failed ? -1 : 0;
       }
       char *child;
@@ -1249,7 +1497,7 @@ static int copyTree(const char *source, const char *destination, int depth,
       item = readdir(directory);
       if (!item) {
         int failed = errno != 0;
-        if (closedir(directory)) failed = 1;
+        if (closedir(directory) < 0) failed = 1;
         return failed ? -1 : 0;
       }
       char *paths;
@@ -1361,7 +1609,7 @@ static int verifyTree(const char *source, const char *destination, int depth,
       }
       free(paths);
     }
-    if (closedir(directory)) result = -1;
+    if (closedir(directory) < 0) result = -1;
     return result;
   }
   if (!S_ISREG(sourceInfo.st_mode) || !S_ISREG(destinationInfo.st_mode) ||
@@ -1440,7 +1688,7 @@ static int removeCopyTree(const char *path, int depth) {
       result = -1;
     free(child);
   }
-  if (closedir(directory)) result = -1;
+  if (closedir(directory) < 0) result = -1;
   if (result == 0 && rmdir(path) != 0)
     result = -1;
   return result;
@@ -1524,10 +1772,10 @@ static int chooseConflict(const char *name, int samePath,
   int selected = 0;
   int count = samePath ? 2 : 3;
   while (1) {
-    drawBrowserFrame(lunaText("Name conflict"), name,
-                     lunaText("The destination already contains this name."),
-                     PROMPT_TWO(ICON_CROSS, lunaText("Choose"), ICON_CIRCLE, lunaText("Cancel")),
-                     count, selected, 0, 0, conflictRow, NULL);
+    drawFileManagerList(lunaText("Name conflict"), name,
+        lunaText("The destination already contains this name."),
+        count, selected, conflictRow, NULL,
+        PROMPT_TWO(ICON_CROSS, lunaText("Choose"), ICON_CIRCLE, lunaText("Cancel")));
     int input = waitForInput(-1);
     if (input & (PAD_CIRCLE | PAD_TRIANGLE))
       return -1;
@@ -1538,12 +1786,11 @@ static int chooseConflict(const char *name, int samePath,
     else if (input & PAD_CROSS) {
       if (selected != 2)
         return selected;
-      drawBrowserFrame(lunaText("Confirm Replace"), name,
-                       existingDirectory ?
-                       lunaText("The existing folder and its contents will be removed.") :
-                       lunaText("The existing file will be removed."),
-                       PROMPT_TWO(ICON_CROSS, lunaText("Replace"), ICON_CIRCLE, lunaText("Cancel")),
-                       1, 0, 0, 0, replaceConfirmRow, NULL);
+      drawFileManagerList(lunaText("Confirm Replace"), name,
+          existingDirectory ? lunaText("The existing folder and its contents will be removed.") :
+                              lunaText("The existing file will be removed."),
+          1, 0, replaceConfirmRow, NULL,
+          PROMPT_TWO(ICON_CROSS, lunaText("Replace"), ICON_CIRCLE, lunaText("Cancel")));
       return (waitForInput(PAD_CROSS | PAD_CIRCLE | PAD_TRIANGLE) & PAD_CROSS) ?
              2 : -1;
     }
@@ -1572,60 +1819,49 @@ static int commitStagedCopy(const char *folder, const char *staging,
 static void drawTransferReview(const BrowserRoot *roots, int rootCount,
                                 const BrowserPane *browser, const CopyQueue *queue,
                                 int move, uint64_t bytes) {
-  int left = keepoutArea + 24, right = gsGlobal->Width - left;
-  int line = getFontLineHeight(), y = 70;
-  char source[PATH_MAX + 1], device[128], text[PATH_MAX + 160];
-  snprintf(source, sizeof(source), "%s", queue->items[0].path);
-  char *slash = strrchr(source, '/');
-  if (slash) slash[1] = '\0';
-  int multiple = 0;
-  for (int i = 1; i < queue->count; i++) {
-    const char *end = strrchr(queue->items[i].path, '/');
-    size_t parent = end ? (size_t)(end - queue->items[i].path + 1) : 0;
-    if (parent != strlen(source) || strncmp(source, queue->items[i].path, parent))
-      multiple = 1;
-  }
-  gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
-  drawBrowserSheet(1);
-  drawTextWindow(left, headerHeight - line, right, headerHeight + 2, 5,
-                 ColorSelectedText, ALIGN_HCENTER, move ? lunaText("Review move") : lunaText("Review copy"));
-  for (int side = 0; side < 2; side++) {
-    if (side == 0) {
-      int sourceRoot = -1, mixed = 0;
-      for (int item = 0; item < queue->count; item++) {
-        int root = -1;
-        for (int i = 0; i < rootCount; i++)
-          if (pathWithin(queue->items[item].path, roots[i].path)) { root = i; break; }
-        if (!item) sourceRoot = root;
-        else if (root != sourceRoot) mixed = 1;
-      }
-      snprintf(device, sizeof(device), "%s", mixed ? lunaText("Multiple drives") :
-          sourceRoot >= 0 ? roots[sourceRoot].label : lunaText("Selected items"));
-    } else fileManagerDeviceName(roots, rootCount, browser, device, sizeof(device));
-    snprintf(text, sizeof(text), "%s: %s",
-             side == 0 ? lunaText("Source") : lunaText("Destination"), device);
-    drawTextWindow(left, y, right, y + line, 5, HeaderTextColor, ALIGN_LEFT, text);
-    y += line + 4;
-    const char *path = side == 0 ? (multiple ? lunaText("Multiple source folders") : source) :
-                                   browser->path;
-    // Preserve the destination's final component even for very deep paths.
-    fileManagerFitText(path, 2 * (right - left - 20) - 32, text, sizeof(text), 1);
-    drawTextWindow(left + 10, y, right - 10, y + 2 * line, 5,
-                   FontMainColor, ALIGN_LEFT, text);
-    y += 2 * line + 10;
-  }
+  int left = keepoutArea + 32, right = gsGlobal->Width - left;
+  int top = 62, bottom = gsGlobal->Height - 28;
+  int line = getFontLineHeight(), y = top + line + 32;
+  char text[PATH_MAX + 160], fitted[PATH_MAX + 160];
+  drawFileManagerModal(left, top, right, bottom,
+                       move ? lunaText("Review move") : lunaText("Review copy"));
+  fileManagerItemSummary(queue->count, 1, move, text, sizeof(text));
+  drawTextWindow(left + 16, y, right - 16, y + line, 14,
+                 FontMainColor, ALIGN_LEFT, text);
+  y += line + 4;
   formatBytes(bytes, text, sizeof(text));
-  char summary[192];
-  snprintf(summary, sizeof(summary), lunaText("%d items selected"), queue->count);
-  drawTextWindow(left + 10, y, right - 10, y + line, 5, FontMainColor, ALIGN_LEFT, summary);
-  y += line + 3;
-  drawTextWindow(left + 10, y, right - 10, y + line, 5, FontMainColor, ALIGN_LEFT, text);
+  fileManagerFitText(text, right - left - 32, fitted, sizeof(fitted), 0);
+  drawTextWindow(left + 16, y, right - 16, y + line, 14,
+                 HeaderTextColor, ALIGN_LEFT, fitted);
+  y += line + 14;
+  drawTextWindow(left + 16, y, right - 16, y + line, 14,
+                 HeaderTextColor, ALIGN_LEFT, lunaText("Destination"));
+  y += line + 6;
+  snprintf(text, sizeof(text), "%s", roots[browser->root].label);
+  fileManagerFitText(text, right - left - 32, fitted, sizeof(fitted), 0);
+  drawTextWindow(left + 16, y, right - 16, y + line, 14,
+                 ColorSelectedText, ALIGN_LEFT, fitted);
+  y += line + 4;
+  const char *relative = browser->path + strlen(roots[browser->root].path);
+  while (*relative == '/') relative++;
+  fileManagerFitText(*relative ? relative : "/", right - left - 32,
+                     fitted, sizeof(fitted), 1);
+  drawTextWindow(left + 16, y, right - 16, y + line, 14,
+                 FontMainColor, ALIGN_LEFT, fitted);
+  y += line + 12;
+  const char *base = strrchr(queue->items[0].path, '/');
+  snprintf(text, sizeof(text), "%s%s", base ? base + 1 : queue->items[0].path,
+           queue->count > 1 ? " ..." : "");
+  fileManagerFitText(text, right - left - 32, fitted, sizeof(fitted), 0);
+  drawTextWindow(left + 16, y, right - 16, y + line, 14,
+                 HeaderTextColor, ALIGN_LEFT, fitted);
   y += line + 8;
-  drawTextWindow(left + 10, y, right - 10, gsGlobal->Height - footerHeight - 4, 5,
+  drawTextWindow(left + 16, y, right - 16, bottom - line - 24, 14,
                  HeaderTextColor, ALIGN_LEFT, lunaText("Verify after copy. Ask before replacing."));
-  drawFileManagerFooter(left, right, PROMPT_TWO(ICON_CROSS,
+  drawFileManagerModalHelp(left, right, bottom, PROMPT_TWO(ICON_CROSS,
       move ? lunaText("Confirm move") : lunaText("Confirm copy"), ICON_CIRCLE, lunaText("Cancel")));
   presentBrowserFrame();
+  (void)rootCount;
 }
 
 static void runCopyQueue(const BrowserRoot *roots, int rootCount,
@@ -1803,9 +2039,9 @@ static void reviewQueue(CopyQueue *queue) {
   while (queue->count > 0) {
     char status[96];
     snprintf(status, sizeof(status), lunaText("%d items queued. Square removes the highlighted mark."), queue->count);
-    drawBrowserFrame(lunaText("Review queue"), queue->items[selected].path,
-        status, PROMPT_TWO(ICON_SQUARE, lunaText("Unmark"), ICON_CIRCLE, lunaText("Back")),
-        queue->count, selected, browserFirstRow(selected), 0, queueRow, queue);
+    drawFileManagerList(lunaText("Review tray"), queue->items[selected].path,
+        status, queue->count, selected, queueRow, queue,
+        PROMPT_TWO(ICON_SQUARE, lunaText("Unmark"), ICON_CIRCLE, lunaText("Back")));
     int input = waitForInput(-1);
     if (input & (PAD_CIRCLE | PAD_TRIANGLE)) return;
     if (input & PAD_UP) selected = (selected + queue->count - 1) % queue->count;
@@ -1897,9 +2133,9 @@ static void deleteItems(const BrowserRoot *roots, int rootCount,
   int selected = 0, confirmed = 0;
   while (1) {
     snprintf(status, statusSize, lunaText("Permanently delete %d items? This cannot be undone."), items->count);
-    drawBrowserFrame(lunaText("Delete items"), items->items[selected].path, status,
-        PROMPT_TWO(ICON_CROSS, lunaText("Delete permanently"), ICON_CIRCLE, lunaText("Cancel")),
-        items->count, selected, browserFirstRow(selected), 0, queueRow, items);
+    drawFileManagerList(lunaText("Delete items"), items->items[selected].path,
+        status, items->count, selected, queueRow, items,
+        PROMPT_TWO(ICON_CROSS, lunaText("Delete permanently"), ICON_CIRCLE, lunaText("Cancel")));
     int input = waitForInput(-1);
     if (input & (PAD_CIRCLE | PAD_TRIANGLE)) break;
     if (input & PAD_UP) selected = (selected + items->count - 1) % items->count;
@@ -2041,10 +2277,9 @@ static void openPaneFile(const BrowserPane *pane, int forceText,
   if (forceText || kind == LUNA_FILE_TEXT) {
     viewTextFile(path, status, statusSize);
   } else if (kind == LUNA_FILE_ELF) {
-    drawBrowserFrame(lunaText("Launch ELF"), path,
-        lunaText("Launch this application and leave LUNA?"),
-        PROMPT_TWO(ICON_CROSS, lunaText("Launch"), ICON_CIRCLE, lunaText("Cancel")),
-        0, 0, 0, 0, NULL, NULL);
+    drawFileManagerList(lunaText("Launch ELF"), entry->name,
+        lunaText("Launch this application and leave LUNA?"), 0, 0, NULL, NULL,
+        PROMPT_TWO(ICON_CROSS, lunaText("Launch"), ICON_CIRCLE, lunaText("Cancel")));
     if (!(waitForInput(PAD_CROSS | PAD_CIRCLE | PAD_TRIANGLE) & PAD_CROSS)) return;
     FileOpenProgress progress = {.path = path, .application = 1};
     const char *error = lunaHomebrewPrepare(path, drawFileOpenProgress, &progress);
@@ -2060,7 +2295,13 @@ static void uiFileManagerLoop(void) {
   browser->root = -1;
   int rootCount = collectRoots(roots);
   CopyQueue queue = {0};
-  int trayCollapsed = 0;
+  int trayCollapsed = 1, queuedMove = 0;
+  fileManagerScene.roots = roots;
+  fileManagerScene.rootCount = rootCount;
+  fileManagerScene.browser = browser;
+  fileManagerScene.queue = &queue;
+  fileManagerScene.trayCollapsed = &trayCollapsed;
+  fileManagerScene.move = &queuedMove;
   memset(&fileManagerTray, 0, sizeof(fileManagerTray));
   int previousHeld = pollInput();
   char status[160];
@@ -2074,7 +2315,9 @@ static void uiFileManagerLoop(void) {
     int held = pollInput();
     int input = held & ~previousHeld;
     previousHeld = held;
-    if (input & PAD_CIRCLE) break;
+    if (input & (PAD_UP | PAD_DOWN | PAD_CIRCLE)) status[0] = '\0';
+    if ((input & PAD_CIRCLE) && pane->root < 0) break;
+    if (!queue.count) queuedMove = 0;
     if (input & PAD_R1) {
       if (queue.count) trayCollapsed = !trayCollapsed;
       continue;
@@ -2085,10 +2328,27 @@ static void uiFileManagerLoop(void) {
       status[0] = '\0';
       continue;
     }
-    if (input & PAD_R2) {
-      int action = chooseFileAction(pane, &queue);
-      if (action == FILE_ACTION_DETAILS)
-        showFileDetails(roots, rootCount, pane);
+    if (input & (PAD_TRIANGLE | PAD_R2)) {
+      int action = chooseFileAction(pane, &queue, (input & PAD_R2) != 0);
+      if (action == FILE_ACTION_COPY_ITEM || action == FILE_ACTION_MOVE_ITEM) {
+        CopyQueue single = {0};
+        if (markEntry(pane, &single, pane->selected, 0) == 1) {
+          queueClear(&queue);
+          queue = single;
+          queuedMove = action == FILE_ACTION_MOVE_ITEM;
+          trayCollapsed = 1;
+          snprintf(status, sizeof(status), "%s", lunaText("Open a destination folder, then press Start."));
+        } else snprintf(status, sizeof(status), "%s", lunaText("Could not select this item."));
+      } else if (action == FILE_ACTION_COPY_MARKED || action == FILE_ACTION_MOVE_MARKED) {
+        queuedMove = action == FILE_ACTION_MOVE_MARKED;
+        trayCollapsed = 1;
+        snprintf(status, sizeof(status), "%s", lunaText("Open a destination folder, then press Start."));
+      } else if (action == FILE_ACTION_CLEAR_QUEUE) {
+        queueClear(&queue);
+        queuedMove = 0;
+        snprintf(status, sizeof(status), "%s", lunaText("Tray cleared."));
+      } else if (action == FILE_ACTION_DETAILS || action == FILE_ACTION_FOLDER_DETAILS)
+        showFileDetails(roots, rootCount, pane, action == FILE_ACTION_FOLDER_DETAILS);
       else if (action == FILE_ACTION_VIEW_TEXT || action == FILE_ACTION_LAUNCH_ELF)
         openPaneFile(pane, action == FILE_ACTION_VIEW_TEXT, status, sizeof(status));
       else if (action == FILE_ACTION_RENAME)
@@ -2118,14 +2378,13 @@ static void uiFileManagerLoop(void) {
             lunaText("Sorted by name; folders first.") :
             lunaText("Loading details for sorting; folders first."));
       } else if (action == FILE_ACTION_MARK_ALL || action == FILE_ACTION_INVERT) {
-        int previousCount = queue.count;
         markListed(pane, &queue, action == FILE_ACTION_INVERT, status, sizeof(status));
-        if (queue.count > previousCount) trayCollapsed = 0;
       }
       previousHeld = pollInput();
-      continue;
+      if (action != FILE_ACTION_OPEN) continue;
+      input = PAD_CROSS;
     }
-    if (input & PAD_TRIANGLE) {
+    if (input & PAD_CIRCLE) {
       if (pane->root >= 0) {
         if (!strcmp(pane->path, roots[pane->root].path)) {
           browserPaneDestroy(pane);
@@ -2158,7 +2417,7 @@ static void uiFileManagerLoop(void) {
             snprintf(status, sizeof(status), "%s", lunaText("Could not open this folder."));
           else status[0] = '\0';
         } else if (entry) {
-          if (lunaFileKind(entry->name) == LUNA_FILE_OTHER) showFileDetails(roots, rootCount, pane);
+          if (lunaFileKind(entry->name) == LUNA_FILE_OTHER) showFileDetails(roots, rootCount, pane, 0);
           else openPaneFile(pane, 0, status, sizeof(status));
           previousHeld = pollInput();
         }
@@ -2167,9 +2426,7 @@ static void uiFileManagerLoop(void) {
       if (pane->root < 0 || !pane->visibleCount) {
         snprintf(status, sizeof(status), "%s", lunaText("Open a folder and select an item to mark."));
       } else {
-        int previousCount = queue.count;
         int result = markEntry(pane, &queue, pane->selected, 1);
-        if (queue.count > previousCount) trayCollapsed = 0;
         if (result == 1) status[0] = '\0';
         else snprintf(status, sizeof(status), "%s", result == 0 ?
             lunaText("A parent or child is already marked.") :
@@ -2178,8 +2435,8 @@ static void uiFileManagerLoop(void) {
     } else if (input & PAD_SELECT) {
       if (!queue.count) continue;
       snprintf(status, sizeof(status), lunaText("Clear all %d marked items?"), queue.count);
-      drawFileManagerFrame(roots, rootCount, browser, &queue, trayCollapsed, status, PROMPT_TWO(ICON_CROSS, lunaText("Clear tray"),
-          ICON_CIRCLE, lunaText("Keep tray")), -1);
+      drawFileManagerList(lunaText("Clear tray"), "", status, 0, 0, NULL, NULL,
+          PROMPT_TWO(ICON_CROSS, lunaText("Clear tray"), ICON_CIRCLE, lunaText("Keep tray")));
       if (waitForInput(PAD_CROSS | PAD_CIRCLE | PAD_TRIANGLE) & PAD_CROSS) {
         queueClear(&queue);
         snprintf(status, sizeof(status), "%s", lunaText("Tray cleared."));
@@ -2187,10 +2444,11 @@ static void uiFileManagerLoop(void) {
       previousHeld = pollInput();
     } else if (input & PAD_START) {
       runCopyQueue(roots, rootCount, browser, &queue, trayCollapsed,
-                   0, status, sizeof(status));
+                   queuedMove, status, sizeof(status));
       previousHeld = pollInput();
     }
   }
+  memset(&fileManagerScene, 0, sizeof(fileManagerScene));
   queueClear(&queue);
   browserPaneDestroy(browser);
   free(browser);
@@ -2376,56 +2634,6 @@ static void uiVMCManagerLoop(void) {
 #include "ps1_vmc.inc"
 #endif
 
-static int unlockFileExplorer(void) {
-  static const int code[] = {PAD_CROSS, PAD_SQUARE, PAD_CIRCLE, PAD_CROSS};
-  int entered = 0;
-  const char *status = "";
-  while (1) {
-    const int left = keepoutArea + 48;
-    const int right = gsGlobal->Width - left;
-    const int top = gsGlobal->Height / 2 - 100;
-    const int bottom = gsGlobal->Height / 2 + 100;
-    char progress[24];
-    snprintf(progress, sizeof(progress), lunaText("%d of 4 buttons entered"), entered);
-    gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
-    drawBrowserSheet(0);
-    drawTextWindow(left, headerHeight - getFontLineHeight(), right,
-                   headerHeight + 2, 0, HeaderTextColor,
-                   ALIGN_HCENTER, lunaText("File Explorer"));
-    drawGlassPanel(left, top, right, bottom, 3);
-    drawTextWindow(left + 12, top + 16, right - 12, top + 44,
-                   4, ColorSelected, ALIGN_HCENTER, lunaText("Under construction"));
-    drawTextWindow(left + 12, top + 55, right - 12, top + 81,
-                   4, FontMainColor, ALIGN_HCENTER,
-                   lunaText("File Explorer is under construction."));
-    drawTextWindow(left + 12, top + 88, right - 12, top + 114,
-                   4, HeaderTextColor, ALIGN_HCENTER,
-                   lunaText("Enter the four-button access code."));
-    drawTextWindow(left + 12, top + 122, right - 12, top + 148,
-                   4, FontMainColor, ALIGN_HCENTER, progress);
-    drawTextWindow(left + 12, top + 160, right - 12, bottom - 10,
-                   4, ErrorTextColor, ALIGN_HCENTER, status);
-    drawPromptBar(left, gsGlobal->Height - footerHeight, right,
-                  gsGlobal->Height, 0, HeaderTextColor,
-                  PROMPT_ONE(ICON_TRIANGLE, lunaText("Back")));
-    presentBrowserFrame();
-
-    int input = waitForInput(PAD_CROSS | PAD_SQUARE | PAD_CIRCLE | PAD_TRIANGLE);
-    if (input & PAD_TRIANGLE)
-      return 0;
-    int button = input & (PAD_CROSS | PAD_SQUARE | PAD_CIRCLE);
-    if (button == code[entered]) {
-      entered++;
-      status = "";
-      if (entered == 4)
-        return 1;
-    } else {
-      entered = 0;
-      status = lunaText("Incorrect code. Try again.");
-    }
-  }
-}
-
 static int storageRow(int index, char *name, size_t nameSize,
                       char *detail, size_t detailSize, CardArtType *art,
                       void *context) {
@@ -2569,14 +2777,18 @@ static int mainMenuRow(int index, char *name, size_t nameSize,
 }
 
 int uiMainMenuLoop(int hasLibrary) {
-  static int fileExplorerUnlocked;
   int selected = 0;
   int count = hasLibrary ? 7 : 6;
   MainMenuContext menu = {.hasLibrary = hasLibrary};
   BrowserSelector selector = {.selected = -1, .wordOnly = 1};
   while (1) {
-    drawBrowserFrameSelected("LUNA", hasLibrary ? lunaText("Main menu") : lunaText("No games found"),
+    int scanFailed = 0;
+    for (int source = 0; source < STORAGE_SOURCE_COUNT; source++)
+      if (STORAGE_STATUS[source].error) scanFailed = 1;
+    drawBrowserFrameSelected("LUNA", hasLibrary ? lunaText("Main menu") :
+                     scanFailed ? lunaText("Scan failed") : lunaText("No games found"),
                      hasLibrary ? lunaText("Browse storage or return to your games.")
+                                : scanFailed ? lunaText("Open Storage Devices to retry the scan.")
                                 : lunaText("Browse storage even without a game library."),
                      hasLibrary ?
                          PROMPT_TWO(ICON_CROSS, lunaText("Select"), ICON_TRIANGLE, lunaText("Back")) :
@@ -2592,12 +2804,8 @@ int uiMainMenuLoop(int hasLibrary) {
     else if (input & PAD_DOWN)
       selected = (selected + 1) % count;
     else if (input & PAD_CROSS) {
-      if (selected == 0) {
-        if (fileExplorerUnlocked || unlockFileExplorer()) {
-          fileExplorerUnlocked = 1;
-          uiFileManagerLoop();
-        }
-      }
+      if (selected == 0)
+        uiFileManagerLoop();
       else if (selected == 1) {
 #ifdef LUNA_ENABLE_PSXCORE
         uiVMCPlatformLoop();

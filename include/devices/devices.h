@@ -27,6 +27,8 @@ extern struct DeviceMapEntry deviceModeMap[];
 
 // Initializes device mode map and returns device count
 int initDeviceMap();
+// Backends that failed with I/O/allocation errors during the latest discovery.
+ModeType deviceDiscoveryFailures(void);
 void freeDeviceMapEntries(struct DeviceMapEntry *entries);
 void syncDeviceMap(void);
 

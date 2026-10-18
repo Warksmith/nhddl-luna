@@ -13,6 +13,7 @@ static char udpfsMountpoint[] = "udpfs0:";
 
 // Initializes map entries for MMCE devices
 int initUDPFSDevices(int newDeviceIdx) {
+  if (newDeviceIdx < 0 || newDeviceIdx >= MAX_DEVICES) return -ENOSPC;
   DIR *directory;
 
   int deviceCount = 0;
@@ -28,6 +29,7 @@ int initUDPFSDevices(int newDeviceIdx) {
       deviceModeMap[newDeviceIdx].mode = MODE_UDPFS;
       deviceModeMap[newDeviceIdx].index = 0;
       deviceModeMap[newDeviceIdx].mountpoint = strdup(udpfsMountpoint);
+      if (!deviceModeMap[newDeviceIdx].mountpoint) return -ENOMEM;
       deviceModeMap[newDeviceIdx].scan = &findISO;
 
       deviceCount++;

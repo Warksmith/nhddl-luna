@@ -92,6 +92,7 @@ char *readOPLConfig() {
 
   // Set partition name
   char *partitionName = calloc(sizeof(char), strlen(val) + 6);
+  if (!partitionName) return NULL;
   strcpy(partitionName, "hdd0:");
   strcat(partitionName, val);
 
@@ -101,7 +102,8 @@ char *readOPLConfig() {
 
 // Creates DeviceMapEntry for metadata device
 struct DeviceMapEntry *createMetadataEntry(char *partitionPath) {
-  struct DeviceMapEntry *dev = malloc(sizeof(struct DeviceMapEntry));
+  struct DeviceMapEntry *dev = calloc(1, sizeof(struct DeviceMapEntry));
+  if (!dev) return NULL;
   dev->scan = NULL;
   dev->metadev = NULL;
   dev->mode = MODE_HDL;
@@ -110,10 +112,12 @@ struct DeviceMapEntry *createMetadataEntry(char *partitionPath) {
   if (!strcmp(partitionPath, "hdd0:__common")) {
     // OPL uses /OPL subfolder on __common partition
     dev->mountpoint = calloc(sizeof(char), sizeof(PFS_MOUNTPOINT) + 4);
+    if (!dev->mountpoint) { free(dev); return NULL; }
     strcpy(dev->mountpoint, PFS_MOUNTPOINT);
     strcat(dev->mountpoint, "/OPL");
   } else
     dev->mountpoint = strdup(PFS_MOUNTPOINT);
+  if (!dev->mountpoint) { free(dev); return NULL; }
 
   DPRINTF("Using %s for HDL metadata\n", dev->mountpoint);
 
@@ -164,6 +168,7 @@ void syncHDL() {
 
 // Initializes map entries for APA-formatted HDDs with HDL partitions
 int initHDL(int deviceIdx) {
+  if (deviceIdx < 0 || deviceIdx >= MAX_DEVICES) return -ENOSPC;
   char mountpoint[] = "hdd0:";
   DIR *directory;
 
@@ -184,14 +189,16 @@ int initHDL(int deviceIdx) {
   }
 
   // Make sure hdd0: is an APA-formatted drive
-  if (checkAPAHeader()) {
+  int apaResult = checkAPAHeader();
+  if (apaResult) {
     DPRINTF("ERROR: failed to find APA partition table on hdd0\n");
-    return -ENODEV;
+    return apaResult < 0 ? apaResult : -ENODEV;
   }
 
   // Set device mountpoint
   deviceModeMap[deviceIdx].mode = MODE_HDL;
   deviceModeMap[deviceIdx].mountpoint = strdup(mountpoint);
+  if (!deviceModeMap[deviceIdx].mountpoint) return -ENOMEM;
   deviceModeMap[deviceIdx].index = 0;
   // Set functions
   deviceModeMap[deviceIdx].scan = &findHDLTargets;
@@ -237,11 +244,15 @@ typedef struct // size = 1024
 #define HDL_FS_MAGIC 0x1337
 
 // Scans given partition and returns new Target if partition has a valid HDL header
-Target *scanPartition(char *deviceMountpoint, char *partitionName, uint32_t startSector) {
+static Target *scanPartition(char *deviceMountpoint, char *partitionName,
+                              uint32_t startSector, int *error) {
   HDLHeader header;
+  *error = 0;
 
   // Note: The APA specification states that there is a 4KB area used for storing the partition's information, before the extended attribute area.
-  uint32_t lba = startSector + (HDL_GAME_DATA_OFFSET + 4096) / 512;
+  unsigned headerOffset = (HDL_GAME_DATA_OFFSET + 4096) / 512;
+  if (startSector > UINT32_MAX - headerOffset) return NULL;
+  uint32_t lba = startSector + headerOffset;
   uint32_t nsectors = 2; // 2 * 512 = 1024 byte
 
   // Read HDLoader header
@@ -250,21 +261,31 @@ Target *scanPartition(char *deviceMountpoint, char *partitionName, uint32_t star
   args->size = nsectors;
   if (fileXioDevctl(deviceMountpoint, HDIOC_READSECTOR, args, sizeof(hddAtaTransfer_t), &header, nsectors * 512) != 0) {
     DPRINTF("ERROR: failed to read sector\n");
+    *error = -EIO;
     return NULL;
   }
 
-  if (header.checksum != 0xdeadfeed) {
+  if (header.checksum != 0xdeadfeed ||
+      !memchr(header.gamename, '\0', sizeof(header.gamename)) ||
+      !memchr(header.startup, '\0', sizeof(header.startup)) ||
+      !header.gamename[0] || !header.startup[0]) {
     DPRINTF("ERROR: invalid HDL checksum (0x%X)\n", header.checksum);
     return NULL;
   }
 
   Target *title = calloc(sizeof(Target), 1);
+  if (!title) { *error = -ENOMEM; return NULL; }
   title->prev = NULL;
   title->next = NULL;
   title->id = strdup(header.startup);
   title->name = strdup(header.gamename);
   // Build full path
   title->fullPath = calloc(sizeof(char), strlen(partitionName) + 5);
+  if (!title->id || !title->name || !title->fullPath) {
+    free(title->id); free(title->name); free(title->fullPath); free(title);
+    *error = -ENOMEM;
+    return NULL;
+  }
   strcpy(title->fullPath, "hdl:");
   strcat(title->fullPath, partitionName);
 
@@ -283,10 +304,14 @@ int findHDLTargets(TargetList *result, struct DeviceMapEntry *device) {
 
   iox_dirent_t dirent = {0};
   // PS2HDD Dread calls return APA partitions
-  while (fileXioDread(fd, &dirent) > 0) {
+  int readResult, scanError = 0;
+  while ((readResult = fileXioDread(fd, &dirent)) > 0) {
     // Check partition magic and partition flag
     if (dirent.stat.mode == HDL_FS_MAGIC && (dirent.stat.attr & APA_FLAG_SUB) == 0) {
-      Target *title = scanPartition(device->mountpoint, dirent.name, dirent.stat.private_5);
+      if (!memchr(dirent.name, '\0', sizeof(dirent.name))) { scanError = -EIO; break; }
+      Target *title = scanPartition(device->mountpoint, dirent.name,
+                                    dirent.stat.private_5, &scanError);
+      if (scanError) break;
       if (!title)
         continue;
 
@@ -295,7 +320,9 @@ int findHDLTargets(TargetList *result, struct DeviceMapEntry *device) {
       appendTarget(result, title);
     }
   }
-  fileXioDclose(fd);
+  if (readResult < 0 && !scanError) scanError = -EIO;
+  if (fileXioDclose(fd) < 0 && !scanError) scanError = -EIO;
+  if (scanError) return scanError;
 
   if (result->total == 0)
     return -ENOENT;

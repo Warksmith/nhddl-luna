@@ -13,6 +13,8 @@
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <strings.h>
+#include <sys/stat.h>
 #include <ps2sdkapi.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,7 +33,7 @@ typedef struct TitleIDCache {
 } TitleIDCache;
 
 int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device);
-void processTitleID(TargetList *result, struct DeviceMapEntry *device);
+int processTitleID(TargetList *result, struct DeviceMapEntry *device);
 
 int storeTitleIDCache(TargetList *list, struct DeviceMapEntry *device);
 int loadTitleIDCache(TitleIDCache *cache, struct DeviceMapEntry *device);
@@ -69,7 +71,8 @@ int findISO(TargetList *result, struct DeviceMapEntry *device) {
     return -EIO;
   }
   int scanResult = _findISO(directory, result, device);
-  if (closedir(directory) && !scanResult)
+  // PS2SDK can return the closed descriptor on success; only negatives fail.
+  if (closedir(directory) < 0 && !scanResult)
     scanResult = -EIO;
   if (chdir(previousDirectory) && !scanResult)
     scanResult = -EIO;
@@ -81,7 +84,8 @@ int findISO(TargetList *result, struct DeviceMapEntry *device) {
   }
 
   // Get title IDs for each found title
-  processTitleID(result, device);
+  int metadataResult = processTitleID(result, device);
+  if (metadataResult) return metadataResult;
 
   if (result->first == NULL) {
     return -ENOENT;
@@ -134,8 +138,16 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
     if (entry->d_name[0] == '.')
       continue;
 
-    // Check if the entry is a directory using d_type
-    switch (entry->d_type) {
+    // Some network/removable drivers do not provide d_type.
+    int type = entry->d_type;
+    if (type == DT_UNKNOWN) {
+      struct stat info;
+      snprintf(titlePath + cwdLen, sizeof(titlePath) - cwdLen, "%s", entry->d_name);
+      if (stat(titlePath, &info) < 0) { scanResult = -EIO; goto done; }
+      type = S_ISDIR(info.st_mode) ? DT_DIR : DT_REG;
+      titlePath[cwdLen] = '\0';
+    }
+    switch (type) {
     case DT_DIR:
       // Ignore directories if max scan depth is reached
       if (curRecursionLevel == MAX_SCAN_DEPTH)
@@ -165,7 +177,7 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
       }
       // Process inner directory recursively
       scanResult = _findISO(d, result, device);
-      if (closedir(d) && !scanResult)
+      if (closedir(d) < 0 && !scanResult)
         scanResult = -EIO;
       titlePath[cwdLen] = '\0';
       if (chdir(titlePath) && !scanResult)
@@ -183,7 +195,7 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
       isVcd = ((device->mode == MODE_ATA && device->index == 0) ||
                (device->mode == MODE_USB && device->index <= 1)) && np_vcd_filename(entry->d_name);
 #endif
-      if (isVcd || ((fileext != NULL) && (!strcmp(fileext, ".iso") || !strcmp(fileext, ".ISO")))) {
+      if (isVcd || (fileext && !strcasecmp(fileext, ".iso"))) {
         // Generate full path
         strcat(titlePath, entry->d_name);
 
@@ -216,18 +228,20 @@ done:
 }
 
 // Fills in title ID for every entry in the list
-void processTitleID(TargetList *result, struct DeviceMapEntry *device) {
+int processTitleID(TargetList *result, struct DeviceMapEntry *device) {
   if (result->total == 0)
-    return;
+    return 0;
 
   // Load title cache
   TitleIDCache *cache = calloc(1, sizeof(TitleIDCache));
-  if (!cache) return;
+  if (!cache) return -ENOMEM;
   int ps2Count = 0;
   for (Target *t=result->first;t;t=t->next)
     if (t->device==device && t->platform==TARGET_PS2) ++ps2Count;
   int isCacheUpdateNeeded = 0;
-  if (loadTitleIDCache(cache, device)) {
+  int cacheResult = loadTitleIDCache(cache, device);
+  if (cacheResult == -ENOMEM) { freeTitleCache(cache); return cacheResult; }
+  if (cacheResult) {
     uiSplashLogString(LEVEL_WARN, "Failed to load title ID cache, all ISOs will be rescanned\n");
     free(cache);
     cache = NULL;
@@ -252,10 +266,16 @@ void processTitleID(TargetList *result, struct DeviceMapEntry *device) {
     if (curTarget->platform == TARGET_PS1) {
       char id[12];
       const char *error = lunaPsxDiscInfo(curTarget->fullPath,id);
-      if (error || !(curTarget->id=strdup(id))) {
+      if (error && (!strcmp(error, "disc-open") || !strcmp(error, "disc-read"))) {
+        freeTitleCache(cache);
+        return -EIO;
+      }
+      if (error) {
         DPRINTF("PS1 inventory rejected: %s (%s)\n",curTarget->fullPath,error?error:"memory");
         curTarget=freeTarget(result,curTarget); continue;
       }
+      curTarget->id = strdup(id);
+      if (!curTarget->id) { freeTitleCache(cache); return -ENOMEM; }
       DPRINTF("PS1 library disc: %s id=%s\n",curTarget->fullPath,curTarget->id);
       curTarget=curTarget->next; continue;
     }
@@ -268,11 +288,19 @@ void processTitleID(TargetList *result, struct DeviceMapEntry *device) {
 
     if (titleID != NULL) {
       curTarget->id = strdup(titleID);
+      if (!curTarget->id) { freeTitleCache(cache); return -ENOMEM; }
     } else { // Get title ID from ISO
       cacheMisses++;
       DPRINTF("Cache miss for %s\n", curTarget->fullPath);
       curTarget->id = getTitleID(curTarget->fullPath);
       if (curTarget->id == NULL) {
+        // Invalid images may be skipped; I/O/allocation failures invalidate
+        // this rescan so storageRefresh can retain the previous library.
+        int error = errno;
+        if (error != EINVAL) {
+          freeTitleCache(cache);
+          return error == ENOMEM ? -ENOMEM : -EIO;
+        }
         uiSplashLogString(LEVEL_WARN, "Failed to scan\n%s\n", curTarget->fullPath);
         curTarget = freeTarget(result, curTarget);
         continue;
@@ -289,6 +317,7 @@ void processTitleID(TargetList *result, struct DeviceMapEntry *device) {
       uiSplashLogString(LEVEL_WARN, "Failed to save title ID cache\n");
     }
   }
+  return 0;
 }
 
 //
@@ -342,7 +371,7 @@ int storeTitleIDCache(TargetList *list, struct DeviceMapEntry *device) {
   char cachePath[PATH_MAX];
   char tempPath[PATH_MAX];
   char dirPath[PATH_MAX];
-  CacheEntryHeader header;
+  CacheEntryHeader header = {0};
   CacheMetadata meta = {.magic = CACHE_MAGIC, .version = CACHE_VERSION, .total = total};
 
   if (buildConfigFilePath(dirPath, sizeof(dirPath), device->mountpoint, NULL) ||
@@ -374,7 +403,7 @@ int storeTitleIDCache(TargetList *list, struct DeviceMapEntry *device) {
     DPRINTF("ERROR: Failed to write metadata: %d\n", errno);
     fclose(file);
     remove(tempPath);
-    return result;
+    return -EIO;
   }
 
   // Write each entry
@@ -405,7 +434,7 @@ int storeTitleIDCache(TargetList *list, struct DeviceMapEntry *device) {
       DPRINTF("ERROR: %s: Failed to write header: %d\n", curTitle->name, errno);
       fclose(file);
       remove(tempPath);
-      return result;
+      return -EIO;
     }
     // Write full ISO path without the mountpoint
     result = fwrite(curTitle->fullPath + mountpointLen, header.pathLength, 1, file);
@@ -413,11 +442,16 @@ int storeTitleIDCache(TargetList *list, struct DeviceMapEntry *device) {
       DPRINTF("ERROR: %s: Failed to write full path: %d\n", curTitle->name, errno);
       fclose(file);
       remove(tempPath);
-      return result;
+      return -EIO;
     }
     curTitle = curTitle->next;
   }
-  fclose(file);
+  int failed = fflush(file) != 0;
+  if (fclose(file)) failed = 1;
+  if (failed) {
+    remove(tempPath);
+    return -EIO;
+  }
 
   remove(cachePath);
   if (rename(tempPath, cachePath)) {

@@ -41,6 +41,9 @@ static SupportedBackends backends[] = {
 // Contains all available devices.
 // Device must be ignored if mode is MODE_ALL or MODE_NONE
 struct DeviceMapEntry deviceModeMap[MAX_DEVICES] = {};
+static ModeType discoveryFailures;
+
+ModeType deviceDiscoveryFailures(void) { return discoveryFailures; }
 
 void syncDeviceMap(void) {
   int pfs = 0;
@@ -66,21 +69,32 @@ void freeDeviceMapEntries(struct DeviceMapEntry *entries) {
 int initDeviceMap() {
   int deviceCount = 0;
   int res = 0;
+  discoveryFailures = MODE_NONE;
   for (int i = 0; i < sizeof(backends) / sizeof(SupportedBackends); i++) {
     if (!(backends[i].targetModes & LAUNCHER_OPTIONS.mode)) {
       // Skip initializing unneeded backends
+      continue;
+    }
+    if (deviceCount >= MAX_DEVICES) {
+      discoveryFailures |= backends[i].targetModes & LAUNCHER_OPTIONS.mode;
       continue;
     }
 
     uiSplashLogString(LEVEL_INFO_NODELAY, "Initializing %s backend\n", backends[i].name);
     if ((res = backends[i].initFunction(deviceCount)) < 0) {
       DPRINTF("ERROR: Failed to initialize %s backend: %d\n", backends[i].name, res);
-      free(deviceModeMap[deviceCount].mountpoint);
-      if (deviceModeMap[deviceCount].metadev) {
-        free(deviceModeMap[deviceCount].metadev->mountpoint);
-        free(deviceModeMap[deviceCount].metadev);
+      if (res != -ENODEV)
+        discoveryFailures |= backends[i].targetModes & LAUNCHER_OPTIONS.mode;
+      // A backend can fail after registering several devices. Release all
+      // unpublished entries, not just its first slot.
+      for (int slot = deviceCount; slot < MAX_DEVICES; slot++) {
+        free(deviceModeMap[slot].mountpoint);
+        if (deviceModeMap[slot].metadev) {
+          free(deviceModeMap[slot].metadev->mountpoint);
+          free(deviceModeMap[slot].metadev);
+        }
+        memset(&deviceModeMap[slot], 0, sizeof(deviceModeMap[slot]));
       }
-      memset(&deviceModeMap[deviceCount], 0, sizeof(deviceModeMap[deviceCount]));
       continue;
     }
     deviceCount += res;

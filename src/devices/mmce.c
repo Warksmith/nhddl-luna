@@ -24,7 +24,7 @@ int initMMCEDevices(int newDeviceIdx) {
   DIR *directory;
 
   int deviceCount = 0;
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < 2 && newDeviceIdx < MAX_DEVICES; i++) {
     mmceMountpoint[4] = i + '0';
 
     directory = opendir(mmceMountpoint);
@@ -35,6 +35,7 @@ int initMMCEDevices(int newDeviceIdx) {
       deviceModeMap[newDeviceIdx].mode = MODE_MMCE;
       deviceModeMap[newDeviceIdx].index = i;
       deviceModeMap[newDeviceIdx].mountpoint = strdup(mmceMountpoint);
+      if (!deviceModeMap[newDeviceIdx].mountpoint) return -ENOMEM;
       deviceModeMap[newDeviceIdx].scan = &findISO;
 
       deviceCount++;

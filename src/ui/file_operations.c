@@ -29,7 +29,7 @@ static int deleteTree(const char *path, int depth,
         deleteTree(child, depth + 1, progress, context);
     free(child);
   }
-  if (closedir(directory) && !result) result = -1;
+  if (closedir(directory) < 0 && !result) result = -1;
   if (!result && progress && progress(path, context)) result = -2;
   if (!result && rmdir(path)) result = -1;
   return result;

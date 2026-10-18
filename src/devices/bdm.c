@@ -42,25 +42,28 @@ int getBDMDeviceDriver(char *mountpoint, struct DeviceMapEntry *entry) {
     return -ENODEV;
   }
 
-  char driverName[10];
-  int deviceNumber;
-  if (fileXioIoctl2(fd, USBMASS_IOCTL_GET_DRIVERNAME, NULL, 0, driverName, sizeof(driverName) - 1) >= 0) {
-    // Null-terminate the string before mapping
-    driverName[sizeof(driverName) - 1] = '\0';
-    entry->mode = mapBDMDriverName(driverName);
+  char driverName[10] = {0};
+  int deviceNumber = -1;
+  int result = fileXioIoctl2(fd, USBMASS_IOCTL_GET_DRIVERNAME, NULL, 0,
+                            driverName, sizeof(driverName) - 1);
+  if (result >= 0)
+    result = fileXioIoctl2(fd, USBMASS_IOCTL_GET_DEVICE_NUMBER, NULL, 0,
+                           &deviceNumber, sizeof(deviceNumber));
+  int closeResult = fileXioDclose(fd);
+  if (result < 0 || closeResult < 0 || !driverName[0] ||
+      deviceNumber < 0 || deviceNumber > UINT8_MAX) {
+    return -EIO;
   }
-
-  // Get device number
-  if (fileXioIoctl2(fd, USBMASS_IOCTL_GET_DEVICE_NUMBER, NULL, 0, &deviceNumber, sizeof(deviceNumber)) >= 0)
-    entry->index = deviceNumber;
+  entry->mode = mapBDMDriverName(driverName);
+  entry->index = deviceNumber;
 
   uiSplashLogString(LEVEL_INFO_NODELAY, "Found device %s%d (%s)\n", driverName, deviceNumber, mountpoint);
-  fileXioDclose(fd);
   return 0;
 }
 
 // Initializes map entries for BDM devices
 int initBDMDevices(int deviceIdx) {
+  if (deviceIdx < 0 || deviceIdx >= MAX_DEVICES) return -ENOSPC;
   DIR *directory = NULL;
   char mountpoint[] = "massX:";
   int deviceCount = 0;
@@ -90,12 +93,13 @@ int initBDMDevices(int deviceIdx) {
     // Set device mountpoint
     deviceModeMap[deviceIdx].mountpoint = strdup(LAUNCHER_OPTIONS.image);
     *sep = temp;
+    if (!deviceModeMap[deviceIdx].mountpoint) return -ENOMEM;
     // Set scan function
     deviceModeMap[deviceIdx].scan = &findISO;
     return 1;
   }
 
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 10 && deviceIdx < MAX_DEVICES; i++) {
     deviceModeMap[deviceIdx].mode = MODE_NONE;
     mountpoint[4] = i + '0';
 
@@ -121,6 +125,7 @@ int initBDMDevices(int deviceIdx) {
 
     // Set device mountpoint
     deviceModeMap[deviceIdx].mountpoint = strdup(mountpoint);
+    if (!deviceModeMap[deviceIdx].mountpoint) return -ENOMEM;
     // Set scan function
     deviceModeMap[deviceIdx].scan = &findISO;
 
