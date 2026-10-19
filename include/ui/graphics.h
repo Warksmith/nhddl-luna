@@ -134,6 +134,7 @@ int getIconWidth(IconType iconType);
 
 // Draws the icon at specified coordinates
 void drawIcon(float x, float y, int z, uint64_t color, IconType iconType);
+void drawIconScaled(float x, float y, int z, uint64_t color, IconType iconType, float scale);
 
 // Draws the icon in [x1,y1],[x2,y2] window.
 void drawIconWindow(int x1, int y1, int x2, int y2, int z, uint64_t color, uint8_t alignment, IconType iconType);

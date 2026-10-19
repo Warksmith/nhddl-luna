@@ -273,6 +273,10 @@ int getIconWidth(IconType iconType) { return ICONS[iconType].width; }
 
 // Draws the icon at specified coordinates
 void drawIcon(float x, float y, int z, uint64_t color, IconType iconType) {
+  drawIconScaled(x, y, z, color, iconType, 1.0f);
+}
+
+void drawIconScaled(float x, float y, int z, uint64_t color, IconType iconType, float scale) {
   Icon icon = ICONS[iconType];
 
   // Preserve the artwork colors for every controller button.
@@ -288,8 +292,8 @@ void drawIcon(float x, float y, int z, uint64_t color, IconType iconType) {
                             y,                        // y1
                             icon.x,                   // u1 (source texture)
                             icon.y,                   // v1
-                            x + icon.width,           // x2 (destination)
-                            y + icon.height,          // y2
+                            x + icon.width * scale,   // x2 (destination)
+                            y + icon.height * scale,  // y2
                             icon.x + icon.width + 1,  // u2 (source texture)
                             icon.y + icon.height + 1, // v2
                             z, color);

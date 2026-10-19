@@ -1478,6 +1478,82 @@ static int psxPrepareProgress(uint64_t completed,uint64_t total) {
   drawPsxLaunchMessage(message,lunaText("Press Triangle to cancel"));
   return (readInput()&PAD_TRIANGLE)!=0;
 }
+static void drawPsxDiscDirection(int x,int y,unsigned direction) {
+  // Rotate a graphical arrow clockwise: up, right, down, left.
+  static const int points[7][2]={{0,-10},{9,-1},{3,-1},{3,10},{-3,10},{-3,-1},{-9,-1}};
+  int px[7],py[7];
+  for(unsigned i=0;i<7;++i) {
+    int dx=points[i][0],dy=points[i][1];
+    for(unsigned turn=0;turn<direction;++turn){int next=-dy;dy=dx;dx=next;}
+    px[i]=x+13+dx;py[i]=y+13+dy;
+  }
+  gsKit_prim_triangle(gsGlobal,px[0],py[0],px[1],py[1],px[6],py[6],0,ColorSelectedText);
+  gsKit_prim_triangle(gsGlobal,px[2],py[2],px[3],py[3],px[4],py[4],0,ColorSelectedText);
+  gsKit_prim_triangle(gsGlobal,px[2],py[2],px[4],py[4],px[5],py[5],0,ColorSelectedText);
+}
+static void drawPsxSwapHeading(int left,int top,int right,float scale,const char *text) {
+  float width=getLineWidth(text);
+  if(width*scale>right-left)scale=(right-left)/width;
+  drawTextLineScaled(left+(right-left-(int)(width*scale))/2,top,right,0,scale,ColorSelectedText,text);
+}
+static void drawPsxDiscSwapMessage(const Target *target,int startDisc) {
+  int panelLeft=keepoutArea+36,panelRight=gsGlobal->Width-panelLeft;
+  int panelTop=headerHeight+12,panelBottom=gsGlobal->Height-28;
+  int left=panelLeft+20,right=panelRight-20,top=panelTop+16;
+  int line=getFontLineHeight()+12;if(line<34)line=34;
+  char text[64];
+  gsKit_TexManager_nextFrame(gsGlobal);
+  gsKit_set_test(gsGlobal,GS_ZTEST_OFF);
+  drawSharedLibraryBackground(uiNowMs());
+  // Keep moving wallpaper outside an opaque, high-contrast reading surface.
+  gsGlobal->PrimAlphaEnable=GS_SETTING_OFF;
+  gsKit_prim_sprite(gsGlobal,panelLeft,panelTop,panelRight,panelBottom,0,ColorPanelEdge);
+  gsKit_prim_sprite(gsGlobal,panelLeft+1,panelTop+1,panelRight-1,panelBottom-1,0,ColorBlack);
+  gsGlobal->PrimAlphaEnable=GS_SETTING_ON;
+  snprintf(text,sizeof(text),"%s %d",lunaText("Start disc"),startDisc+1);
+  drawPsxSwapHeading(left,top,right,1.3f,text);
+  top+=line+2;
+  drawPsxSwapHeading(left,top,right,1.1f,lunaText("To swap discs in-game:"));
+  top+=line;
+  const IconType chord[]={ICON_L2,ICON_R2,ICON_SELECT,ICON_DPAD};
+  int selectWidth=(int)getLineWidth("SELECT")+16;
+  int plusWidth=(int)getLineWidth("+");
+  int chordWidth=3*39+selectWidth+3*(20+plusWidth);
+  int x=(gsGlobal->Width-chordWidth)/2;
+  for(unsigned i=0;i<4;++i) {
+    int width=i==2?selectWidth:39;
+    if(i==2) {
+      // A labeled button silhouette stays recognizable at television resolution.
+      gsKit_prim_sprite(gsGlobal,x,top+5,x+width,top+34,0,ColorSelectedText);
+      gsKit_prim_sprite(gsGlobal,x+2,top+7,x+width-2,top+32,0,ColorPanel);
+      drawTextWindow(x+4,top+5,x+width-4,top+34,0,ColorSelectedText,ALIGN_CENTER,"SELECT");
+    } else drawIconScaled(x,top,0,ColorSelectedText,chord[i],1.5f);
+    x+=width;
+    if(i<3) {
+      drawTextWindow(x+10,top,x+10+plusWidth,top+39,0,ColorSelectedText,ALIGN_VCENTER,"+");
+      x+=20+plusWidth;
+    }
+  }
+  top+=49;
+  drawPsxSwapHeading(left,top,right,1.05f,lunaText("Hold together, then release."));
+  top+=line+4;
+  int middle=(left+right)/2;
+  for(unsigned i=0;i<target->discs->count;++i) {
+    snprintf(text,sizeof(text),"%s %u",lunaText("Disc"),((unsigned)startDisc+i)%target->discs->count+1);
+    int slotLeft=(i%2)?middle:left,slotRight=(i%2)?right:middle;
+    int x=slotLeft+12;
+    int y=top+(int)(i/2)*(line+6);
+    gsKit_prim_sprite(gsGlobal,slotLeft+3,y,slotRight-3,y+line,0,ColorPanel);
+    drawPsxDiscDirection(x,y+(line-26)/2,i);
+    drawTextLineScaled(x+38,y+(line-(int)(getFontLineHeight()*1.15f))/2,
+      slotRight-10,0,1.15f,ColorSelectedText,text);
+  }
+  const ButtonPrompt actions[]={{ICON_CROSS,lunaText("Launch")},{ICON_TRIANGLE,lunaText("Return")}};
+  drawPromptBar(left,panelBottom-48,right,panelBottom-12,0,
+    ColorSelectedText,(PromptBar){NULL,actions,2});
+  gsKit_set_test(gsGlobal,GS_ZTEST_ON);
+  gsKit_queue_exec(gsGlobal);gsKit_finish();gsKit_sync_flip(gsGlobal);
+}
 int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection,
                      ArgumentList *arguments) {
   char error[192];int createCards=0;
@@ -1494,14 +1570,8 @@ int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection,
   int codeValidation=options.ps1CodeValidation,startDisc=options.ps1StartDisc;
   while(saved.first){Argument *next=saved.first->next;free(saved.first->arg);free(saved.first->value);free(saved.first);saved.first=next;}
   if(target->discs && !target->discs->error[0] && startDisc>=0 && (unsigned)startDisc<target->discs->count) {
-    static const char *const directions[]={"Up","Right","Down","Left"};
-    char message[512];int used=snprintf(message,sizeof(message),"%s %d\n\n%s\n",lunaText("Start disc"),startDisc+1,
-      lunaText("To swap in-game, press L2 + R2 + Select with a direction, then release:"));
-    for(unsigned i=0;i<target->discs->count;++i)
-      used+=snprintf(message+used,sizeof(message)-(size_t)used,"%s: %s %u\n",lunaText(directions[i]),lunaText("Disc"),
-        ((unsigned)startDisc+i)%target->discs->count+1);
     for(;;) {
-      drawPsxLaunchMessage(message,lunaText("Cross: launch   Triangle: return"));
+      drawPsxDiscSwapMessage(target,startDisc);
       int input=readInput();if(input&PAD_TRIANGLE)return 0;if(input&PAD_CROSS)break;
     }
   }
