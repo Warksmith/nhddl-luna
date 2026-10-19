@@ -43,9 +43,10 @@ const char *lunaPsxBootstrapCheck(const void *bytes,size_t size,NpElf *out) {
         }
         if(type!=1)return "bootstrap-segment-type";
         if(!mem || files>mem || off>size || files>size-off)return "bootstrap-segment-size";
-        // Low resident hooks and normal bootstrap code only. No kernel aliases,
+        // Upstream native-swap arenas begin at 0xe8000 (resident.ld); ordinary
+        // hooks still begin at 0xf0000. No kernel aliases,
         // frontend transfer storage, firmware staging, or scratchpad executable.
-        if(addr<0x000f0000u || addr>=0x00800000u || mem>0x00800000u-addr || phys!=addr)
+        if(addr<0x000e8000u || addr>=0x00800000u || mem>0x00800000u-addr || phys!=addr)
             return "bootstrap-segment-address";
         if(flags&~7u)return "bootstrap-segment-flags";
         if(align>1 && ((align&(align-1)) || (addr&(align-1))!=(off&(align-1))))

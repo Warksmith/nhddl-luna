@@ -20,6 +20,12 @@ static struct DeviceMapEntry *favoriteDevice(Target *target) {
 }
 
 static const char *relativeTargetPath(Target *target) {
+  // Synthetic identity is stable across starting-disc and playlist-name changes.
+  static char setPath[64];
+  if (target->discs && target->discs->key[0]) {
+    snprintf(setPath, sizeof(setPath), "/@PS1SET/%s", target->discs->key);
+    return setPath;
+  }
   int relativeIndex = getRelativePathIdx(target->fullPath);
   return target->fullPath + ((relativeIndex < 0) ? 0 : relativeIndex);
 }
@@ -61,9 +67,12 @@ static int readFavoriteFile(const char *path, int staged, TargetList *titles,
     if (!length || !titles || !flags)
       continue;
     for (Target *target = titles->first; target; target = target->next)
-      if (target->idx < flagCount && favoriteDevice(target) == device &&
-          !strcmp(favorite, relativeTargetPath(target)))
-        flags[target->idx] = 1;
+      if (target->idx < flagCount && favoriteDevice(target) == device) {
+        int match = !strcmp(favorite, relativeTargetPath(target));
+        if (target->discs) for (unsigned disc=0; disc<target->discs->count; ++disc)
+          if (!strcmp(favorite, target->discs->paths[disc])) match=1;
+        if (match) flags[target->idx] = 1;
+      }
   }
   if (ferror(file))
     result = -EIO;

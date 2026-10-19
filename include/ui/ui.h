@@ -16,7 +16,8 @@ int uiLaunchTitleWithCheats(Target *target, ArgumentList *arguments,
                            const LunaCheatSettings *cheats);
 #ifdef LUNA_ENABLE_PSXCORE
 struct LunaPsxVmcSettings;
-int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection);
+int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection,
+                     ArgumentList *arguments);
 #endif
 
 // Splash screen log level types

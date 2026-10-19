@@ -166,8 +166,9 @@ static int ps1PickPath(int folder, const char *heading, char out[256]) {
   BrowserSelector selector = {.selected = -1};
   for (;;) {
     drawBrowserFrameSelected(lunaText(heading), active < 0 ? lunaText("Choose a drive") : path,
-        status[0] ? status : folder ? lunaText("Square chooses this folder. Cross opens a folder.") : lunaText("Choose a raw 128 KB memory card image."),
-        folder && active >= 0 ? PROMPT_TWO(ICON_SQUARE, lunaText("Choose folder"), ICON_TRIANGLE, lunaText("Back")) :
+        status[0] ? status : folder==1 ? lunaText("Square chooses this folder. Cross opens a folder.") :
+        folder==2 ? lunaText("Choose a VCD on the game's drive.") : lunaText("Choose a raw 128 KB memory card image."),
+        folder==1 && active >= 0 ? PROMPT_TWO(ICON_SQUARE, lunaText("Choose folder"), ICON_TRIANGLE, lunaText("Back")) :
         PROMPT_TWO(ICON_CROSS, lunaText("Open/Select"), ICON_TRIANGLE, lunaText("Back")),
         active < 0 ? rootCount : count, selected, browserFirstRow(selected), 0,
         active < 0 ? rootRow : fileRow, active < 0 ? (void *)roots : (void *)entries, &selector);
@@ -183,7 +184,7 @@ static int ps1PickPath(int folder, const char *heading, char out[256]) {
     int total = active < 0 ? rootCount : count;
     if (total && (input & PAD_UP)) selected = (selected + total - 1) % total;
     else if (total && (input & PAD_DOWN)) selected = (selected + 1) % total;
-    else if (folder && active >= 0 && (input & PAD_SQUARE)) {
+    else if (folder==1 && active >= 0 && (input & PAD_SQUARE)) {
       if (strlen(path) >= 256) snprintf(status, sizeof(status), "%s", lunaText("The current path is too long."));
       else { snprintf(out, 256, "%s", path); result = 1; break; }
     } else if (total && (input & PAD_CROSS)) {
@@ -192,7 +193,7 @@ static int ps1PickPath(int folder, const char *heading, char out[256]) {
         char child[PATH_MAX + 1];
         if (!joinPath(child, sizeof(child), path, entries[selected].name)) continue;
         if (!entries[selected].isDirectory) {
-          if (folder) continue;
+          if (folder==1 || (folder==2 && !np_vcd_filename(child))) continue;
           if (strlen(child) >= 256) { snprintf(status, sizeof(status), "%s", lunaText("The current path is too long.")); continue; }
           snprintf(out, 256, "%s", child); result = 1; break;
         }

@@ -48,7 +48,8 @@ typedef enum {
   GAME_CHEATS,
   GAME_LAUNCH,
   GAME_SECTION_COUNT,
-  GAME_VIDEO_OUT
+  GAME_VIDEO_OUT,
+  GAME_DISCS
 } GameSection;
 
 typedef struct {
@@ -115,6 +116,7 @@ typedef struct {
 #ifdef LUNA_ENABLE_PSXCORE
   LunaPsxVmcSettings ps1Cards;
   int ps1CardsReady;
+  int ps1CardsChanged;
   char ps1SetName[64], ps1SlotStatus[2][32];
 #endif
   OptionsPage page;
@@ -163,7 +165,7 @@ static const char *const gameRowLabels[LUNA_GAME_ROW_COUNT] = {
     "Show PS2 logo", "Debug colors", "Game core",
     "Accurate reads", "Synchronous reads", "Unhook syscalls",
     "Skip videos", "Emulate DVD-DL", "Disable IGR", "Disable IGR",
-    "Video out", "Field flipping"};
+    "Video out", "Field flipping", "Code Validation"};
 
 static const char *const gameRowDescriptions[LUNA_GAME_ROW_COUNT] = {
     "Use faster IOP disc reads for this game.",
@@ -187,7 +189,8 @@ static const char *const gameRowDescriptions[LUNA_GAME_ROW_COUNT] = {
     "Disable OPL's in-game reset for this title.",
     "Disable Neutrino's in-game return for this title.",
     "Open the Neutrino and OPL video output modes.",
-    "Emulate field flipping when OPL forces a video output mode."};
+    "Emulate field flipping when OPL forces a video output mode.",
+    "Helps with non-boot/black-screen issues. Off by default."};
 
 static const char *const gameSectionLabels[GAME_SECTION_COUNT] = {
     "Virtual memory cards", "Game core", "Compatibility", "Video", "Cheats", "Launch & debug"};
@@ -505,7 +508,8 @@ static int gameLaunchEnabled(const OptionsMenuState *state) {
                strcmp(name, "gsm") && strcmp(name, "mc0") &&
                strcmp(name, "mc1") && strcmp(name, "luna_neutrino_disable_igr") &&
                strcmp(name, "luna_opl_compat") && strcmp(name, "luna_opl_gsm") &&
-               strcmp(name, "luna_opl_field_flip") && strcmp(name, "luna_core")) {
+               strcmp(name, "luna_opl_field_flip") && strcmp(name, "luna_core") &&
+               strcmp(name, "luna_ps1_code_validation") && strcmp(name, "luna_ps1_start_disc")) {
       // Other arguments belong to Launch arguments, including disabled overrides.
       enabled += !argument->isDisabled || !argument->isGlobal;
     }
@@ -692,7 +696,11 @@ static void drawGameCheatRows(OptionsMenuState *state, int baseX, int firstY, in
 static void drawTitleOptionsFrame(OptionsMenuState *state,
                                   int transitionProgress, int transitionMode) {
   const int showDirty = transitionMode != 2;
-  const int gameDirty = showDirty && (state->titleArgumentsChanged || state->cheatsChanged);
+  const int gameDirty = showDirty && (state->titleArgumentsChanged || state->cheatsChanged
+#ifdef LUNA_ENABLE_PSXCORE
+                                     || state->ps1CardsChanged
+#endif
+                                     );
   const int systemDirty = showDirty && (state->pendingPs1CaseStyle != getPs1CaseStyle() || optionsGlobalDirty(
       state->pendingBackground, state->pendingGlassColor,
       state->pendingFont, state->pendingAmbient, state->pendingLogo,
@@ -925,13 +933,70 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
       const int contentTop = menuTop + lineHeight + 5;
       const int firstY = contentTop + lineHeight + 4;
       drawOptionsSection(contentTop, lunaText("Game settings"), 0);
+      int step = lineHeight + lineHeight / 2;
       int selectorY = optionsSelectorY(&state->selector, state->page,
-                                       GAME_MEMORY_CARDS, firstY);
-      drawOptionsTextRow(baseX, firstY, gsGlobal->Width - baseX,
-                         1, selectorY, lunaText("Virtual memory cards"), NULL);
+                                       state->selectedGameHubRow,
+                                       firstY + state->selectedGameHubRow * step);
+      char compatSummary[24];
+      if (state->gameOptions.ps1CodeValidation)
+        snprintf(compatSummary, sizeof(compatSummary), lunaText("%d enabled"), 1);
+      else
+        snprintf(compatSummary, sizeof(compatSummary), "%s", lunaText("Default"));
+      char discSummary[24];
+      snprintf(discSummary, sizeof(discSummary), "%u %s", state->target->discs ? state->target->discs->count : 1,
+               lunaText("discs"));
+      for (int row = 0; row < 3; ++row)
+        drawOptionsTextRow(baseX, firstY + row * step, gsGlobal->Width - baseX,
+                           state->selectedGameHubRow == row, selectorY,
+                           lunaText(row == 2 ? "Discs" : row ? "Compatibility" : "Virtual memory cards"),
+                           row == 2 ? discSummary : row ? compatSummary : NULL);
       drawTextWindow(baseX + 18, menuBottom, gsGlobal->Width - baseX,
                      gsGlobal->Height - footerHeight, 0, HeaderTextColor, ALIGN_LEFT,
-                     lunaText("Open to select shared memory cards or manage saves."));
+                     state->vmcStatus[0] ? lunaText(state->vmcStatus) :
+                     lunaText(state->selectedGameHubRow == 2 ? "Choose a starting disc or manage this game's disc set." : state->selectedGameHubRow ?
+                         "Change this game's compatibility switches." :
+                         "Open to select shared memory cards or manage saves."));
+    } else if (state->gameSection == GAME_COMPATIBILITY) {
+      drawTextWindow(baseX, menuTop, gsGlobal->Width - baseX, 0, 0,
+                     HeaderTextColor, ALIGN_HCENTER, state->titleHeader);
+      const int contentTop = menuTop + lineHeight + 5;
+      const int firstY = contentTop + lineHeight + 4;
+      drawOptionsSection(contentTop, lunaText("Compatibility"), 0);
+      int selectorY = optionsSelectorY(&state->selector, state->page, 0, firstY);
+      drawOptionsTextRow(baseX, firstY, gsGlobal->Width - baseX, 1, selectorY,
+                         lunaText("Code Validation"),
+                         lunaGameOptionsValue(&state->gameOptions, LUNA_GAME_PS1_CODE_VALIDATION));
+      drawTextWindow(baseX + 18, menuBottom, gsGlobal->Width - baseX,
+                     gsGlobal->Height - footerHeight, 0, HeaderTextColor, ALIGN_LEFT,
+                     state->vmcStatus[0] ? lunaText(state->vmcStatus) :
+                     lunaText("Helps with non-boot/black-screen issues. Off by default."));
+    } else if (state->gameSection == GAME_DISCS) {
+      const int contentTop = menuTop + lineHeight + 5;
+      const int firstY = contentTop + lineHeight + 4;
+      const int step = lineHeight + lineHeight / 2;
+      drawTextWindow(baseX, menuTop, gsGlobal->Width-baseX, 0, 0,
+                     HeaderTextColor, ALIGN_HCENTER, state->titleHeader);
+      drawOptionsSection(contentTop, lunaText("Discs"), 0);
+      char start[32];
+      int disc = state->gameOptions.ps1StartDisc;
+      unsigned count = state->target->discs ? state->target->discs->count : 1;
+      if (disc < 0 || (unsigned)disc >= count) snprintf(start,sizeof(start),"%s",lunaText("Unavailable"));
+      else snprintf(start,sizeof(start),"%s %d / %u",lunaText("Disc"),disc+1,count);
+      int selectorY = optionsSelectorY(&state->selector,state->page,state->selectedGameRow,
+                                       firstY+state->selectedGameRow*step);
+      drawOptionsTextRow(baseX,firstY,gsGlobal->Width-baseX,state->selectedGameRow==0,
+                         selectorY,lunaText("Start disc"),start);
+      drawOptionsTextRow(baseX,firstY+step,gsGlobal->Width-baseX,state->selectedGameRow==1,
+                         selectorY,lunaText("Manage discs"),NULL);
+      if (state->target->discs && disc>=0 && (unsigned)disc<count) {
+        const char *path=state->target->discs->paths[disc], *slash=strrchr(path,'/');
+        drawTextWindow(baseX+18,firstY+step*3,gsGlobal->Width-baseX,0,0,
+                       HeaderTextColor,ALIGN_LEFT,slash?slash+1:path);
+      }
+      drawTextWindow(baseX+18,menuBottom,gsGlobal->Width-baseX,gsGlobal->Height-footerHeight,0,
+                     HeaderTextColor,ALIGN_LEFT,state->vmcStatus[0]?lunaText(state->vmcStatus):
+                     state->target->discs && state->target->discs->error[0]?lunaText(state->target->discs->error):
+                     lunaText("All discs use the same memory cards. Swapping controls are shown before launch."));
     } else {
 #ifdef LUNA_ENABLE_PSXCORE
     const char *labels[] = {"Card behavior", "Slot 1", "Slot 2", "Manage cards"};
@@ -1056,7 +1121,8 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
     }
   }
   if (state->page == OPTIONS_PER_GAME && state->target->platform == TARGET_PS1) {
-    const ButtonPrompt prompts[] = {{ICON_CROSS, state->gameSection == GAME_HUB ? lunaText("Open") : lunaText("Select")}, {ICON_START, lunaText("Save")},
+    const ButtonPrompt prompts[] = {{ICON_CROSS, state->gameSection == GAME_HUB ? lunaText("Open") :
+        state->gameSection == GAME_COMPATIBILITY ? lunaText("Toggle") : lunaText("Select")}, {ICON_START, lunaText("Save")},
                                    {ICON_SQUARE, lunaText("Launch")}, {ICON_TRIANGLE, lunaText("Back")}};
 #ifdef LUNA_ENABLE_PSXCORE
     const ButtonPrompt retryPrompts[] = {{ICON_DPAD, lunaText("Move")},
@@ -1065,7 +1131,7 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
     drawPromptBar(20, gsGlobal->Height-footerHeight, gsGlobal->Width-20,
                   gsGlobal->Height, 16, HeaderTextColor,
 #ifdef LUNA_ENABLE_PSXCORE
-                  state->gameSection != GAME_HUB && !state->ps1CardsReady ? (PromptBar){NULL,retryPrompts,3} :
+                  state->gameSection == GAME_MEMORY_CARDS && !state->ps1CardsReady ? (PromptBar){NULL,retryPrompts,3} :
 #endif
                   (PromptBar){NULL,prompts,4});
   } else drawOptionsFooter(state->page == OPTIONS_PER_GAME, 0,
@@ -1570,22 +1636,79 @@ static int handleGameInput(OptionsMenuState *state, int input) {
       return 0;
     }
     if (state->gameSection == GAME_HUB) {
+      if (input & (PAD_UP | PAD_DOWN)) {
+        state->selectedGameHubRow = (state->selectedGameHubRow + ((input & PAD_UP) ? 2 : 1)) % 3;
+        state->vmcStatus[0] = 0;
+        return 0;
+      }
       if (input & (PAD_CROSS | PAD_CIRCLE)) {
-        state->gameSection = GAME_MEMORY_CARDS;
+        state->gameSection = state->selectedGameHubRow == 2 ? GAME_DISCS :
+                             state->selectedGameHubRow ? GAME_COMPATIBILITY : GAME_MEMORY_CARDS;
         state->selectedGameRow = 0;
         state->selector.initialized = 0;
 #ifdef LUNA_ENABLE_PSXCORE
-        if (!state->ps1CardsReady) loadPs1Cards(state);
+        if (state->gameSection == GAME_MEMORY_CARDS && !state->ps1CardsReady) loadPs1Cards(state);
 #endif
         return 0;
+      }
+      if (!(input & (PAD_START | PAD_SQUARE))) return 0;
+    }
+    if (input & PAD_START) {
+      state->saveError = 0;
+      state->saveErrorLabel = NULL;
+      if (state->titleArgumentsChanged) {
+        state->saveError = updateTitleLaunchArguments(state->target, state->titleArguments);
+        if (!state->saveError) state->titleArgumentsChanged = 0;
+        else state->saveErrorLabel = "Could not save game settings";
       }
 #ifdef LUNA_ENABLE_PSXCORE
-      if (!state->ps1CardsReady) {
-        if (input & PAD_SQUARE) return uiLaunchPs1Cards(state->target, NULL);
-        return 0;
+      if (!state->saveError && state->ps1CardsChanged) {
+        state->saveErrorLabel = lunaPsxVmcSave(&state->ps1Cards);
+        state->saveError = state->saveErrorLabel != NULL;
+        if (!state->saveError) state->ps1CardsChanged = 0;
       }
 #endif
-      if (!(input & (PAD_START | PAD_SQUARE))) return 0;
+      snprintf(state->vmcStatus, sizeof(state->vmcStatus), "%s",
+               state->saveError ? state->saveErrorLabel : "Game settings saved.");
+      return 0;
+    }
+#ifdef LUNA_ENABLE_PSXCORE
+    if (input & PAD_SQUARE)
+      return uiLaunchPs1Cards(state->target, state->ps1CardsReady ? &state->ps1Cards : NULL,
+                              state->titleArguments);
+#endif
+    if (state->gameSection == GAME_DISCS) {
+      if(input & (PAD_UP|PAD_DOWN)) {state->selectedGameRow ^= 1;return 0;}
+      if(!state->selectedGameRow && (input & (PAD_CROSS|PAD_CIRCLE|PAD_LEFT|PAD_RIGHT))) {
+        unsigned count=state->target->discs?state->target->discs->count:1;
+        int disc=state->gameOptions.ps1StartDisc;
+        if(count)disc=(disc+(input&PAD_LEFT?(int)count-1:1))%(int)count;
+        if(count && lunaGameOptionsSetPs1Disc(&state->gameOptions,state->titleArguments,disc)) {
+          state->titleArgumentsChanged=1;state->vmcStatus[0]=0;
+        }
+      }
+#ifdef LUNA_ENABLE_PSXCORE
+      else if(state->selectedGameRow && (input & (PAD_CROSS|PAD_CIRCLE))) {
+        if(state->titleArgumentsChanged || state->ps1CardsChanged) {
+          snprintf(state->vmcStatus,sizeof(state->vmcStatus),"%s","Press Start to save pending game settings before managing discs.");
+          return 0;
+        }
+        int result=uiPs1DiscManage(state->target);
+        state->selector.initialized=0;
+        if(result==STORAGE_UI_REFRESH)return result;
+      }
+#endif
+      return 0;
+    }
+    if (state->gameSection == GAME_COMPATIBILITY) {
+      if ((input & (PAD_CROSS | PAD_CIRCLE | PAD_LEFT | PAD_RIGHT)) &&
+          lunaGameOptionsChange(&state->gameOptions, state->titleArguments,
+                                LUNA_GAME_PS1_CODE_VALIDATION, 1)) {
+        state->titleArgumentsChanged = 1;
+        state->saveError = 0;
+        state->vmcStatus[0] = 0;
+      }
+      return 0;
     }
 #ifdef LUNA_ENABLE_PSXCORE
     // Navigation never depends on successful storage IO.
@@ -1596,21 +1719,14 @@ static int handleGameInput(OptionsMenuState *state, int input) {
           uiPs1VmcRetry(state->target, state->vmcStatus)) loadPs1Cards(state);
       return 0;
     }
-    if (input & PAD_SQUARE) return uiLaunchPs1Cards(state->target, &state->ps1Cards);
-    if (input & PAD_START) {
-      const char *error = lunaPsxVmcSave(&state->ps1Cards);
-      state->saveError = error != NULL;
-      state->saveErrorLabel = error;
-      snprintf(state->vmcStatus, sizeof(state->vmcStatus), "%s", error ? error : "Memory card settings saved.");
-      if (!error) state->titleArgumentsChanged = 0;
-    } else if (input & (PAD_CROSS | PAD_CIRCLE)) {
+    if (input & (PAD_CROSS | PAD_CIRCLE)) {
       int changed = 0;
       if (!state->selectedGameRow) changed = uiPs1VmcPolicy(state->target, &state->ps1Cards);
       else {
         uiPs1VmcManage(&state->ps1Cards, state->selectedGameRow <= 2 ? state->selectedGameRow - 1 : -1);
       }
       if (changed) {
-        state->titleArgumentsChanged = 1; state->saveError = 0;
+        state->ps1CardsChanged = 1; state->saveError = 0;
         snprintf(state->vmcStatus, sizeof(state->vmcStatus), "%s", "Card selection changed. Press Start to save.");
       }
       uiPs1VmcDescribe(&state->ps1Cards, state->ps1SetName, state->ps1SlotStatus);
@@ -1853,6 +1969,10 @@ int uiTitleOptionsLoop(Target *target, int *classicArtOverlap,
   state.titleArguments = target->platform == TARGET_PS1 ? calloc(1,sizeof(ArgumentList)) :
                                                         loadLaunchArgumentLists(state.target);
   if (!state.titleArguments) return 0;
+  if (target->platform == TARGET_PS1 && getTitleLaunchArguments(state.titleArguments, target)) {
+    freeArgumentList(state.titleArguments);
+    return 0;
+  }
   lunaGameOptionsRead(&state.gameOptions, state.titleArguments);
   if (target->platform != TARGET_PS1 && lunaCheatsLoadSettings(target, &state.cheats)) {
     state.cheatsChanged = 1; // Save can repair an unreadable selection file.
@@ -1906,7 +2026,7 @@ int uiTitleOptionsLoop(Target *target, int *classicArtOverlap,
     }
     int action = handleGameInput(&state, input);
     if (action != 0) {
-      res = action < 0 ? -1 : 0;
+      res = action == STORAGE_UI_REFRESH ? action : action < 0 ? -1 : 0;
       goto exit;
     }
   }

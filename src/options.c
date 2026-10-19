@@ -443,11 +443,15 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
     // Prefer the exact filename written by the Save action when both exist.
     char filename[PATH_MAX + 1] = "";
     struct dirent *entry;
-    size_t nameLength = strlen(target->name);
+    char setName[48];
+    if (target->discs && target->discs->key[0])
+      snprintf(setName, sizeof(setName), "PS1SET-%s", target->discs->key);
+    const char *configName = target->discs && target->discs->key[0] ? setName : target->name;
+    size_t nameLength = strlen(configName);
     while ((entry = readdir(directory)) != NULL) {
       size_t entryLength = strlen(entry->d_name);
       if (entry->d_type == DT_DIR || entryLength < nameLength + 5 ||
-          strncmp(entry->d_name, target->name, nameLength) ||
+          strncmp(entry->d_name, configName, nameLength) ||
           strcmp(entry->d_name + entryLength - 5, ".yaml"))
         continue;
       if (filename[0] == '\0' ||
@@ -467,6 +471,15 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
     if (ret)
       DPRINTF("ERROR: Failed to load argument list: %d\n", ret);
     return ret;
+  }
+  if (target->discs && target->discs->count && !target->discs->error[0]) {
+    // Inherit Disc 1's existing compatibility choice until the set is saved.
+    char memberName[256];
+    const char *member = strrchr(target->discs->paths[0], '/');
+    snprintf(memberName, sizeof(memberName), "%s", member ? member + 1 : target->discs->paths[0]);
+    char *extension = strrchr(memberName, '.'); if (extension) *extension = 0;
+    Target first = *target; first.discs = NULL; first.name = memberName;
+    return getTitleLaunchArguments(result, &first);
   }
   DPRINTF("Title-specific config not found\n");
   return 0;
@@ -489,7 +502,11 @@ int updateTitleLaunchArguments(Target *target, ArgumentList *options) {
   if (stat(lineBuffer, &st) == -1 && mkdir(lineBuffer, 0777))
     return -EIO;
   char filename[PATH_MAX + 1];
-  if (snprintf(filename, sizeof(filename), "%s.yaml", target->name) >= sizeof(filename))
+  char setName[48];
+  if (target->discs && target->discs->key[0])
+    snprintf(setName, sizeof(setName), "PS1SET-%s", target->discs->key);
+  const char *configName = target->discs && target->discs->key[0] ? setName : target->name;
+  if (snprintf(filename, sizeof(filename), "%s.yaml", configName) >= sizeof(filename))
     return -ENAMETOOLONG;
   if (buildConfigFilePath(lineBuffer, sizeof(lineBuffer), device->mountpoint, filename))
     return -ENAMETOOLONG;
@@ -627,6 +644,8 @@ int parseOptionsFile(ArgumentList *result, FILE *file, struct DeviceMapEntry *de
     // Admit only the supported frontend metadata; it is filtered at handoff.
     const char *name = argPtr[0] == '$' ? argPtr + 1 : argPtr;
     if (!strncmp(name, "luna_", 5) &&
+        strcmp(name, "luna_ps1_code_validation") &&
+        strcmp(name, "luna_ps1_start_disc") &&
         strcmp(name, "luna_neutrino_disable_igr") &&
         strcmp(name, "luna_core") && strcmp(name, "luna_opl_compat") &&
         strcmp(name, "luna_opl_gsm") && strcmp(name, "luna_opl_field_flip"))

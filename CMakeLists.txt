@@ -140,7 +140,7 @@ add_executable(${EE_BIN} ${SOURCES})
 
 if(LUNA_ENABLE_PSXCORE)
   enable_language(ASM)
-  target_sources(${EE_BIN} PRIVATE src/psxcore_launch.c src/psxcore_transfer.c src/psxcore_transfer.S src/psxcore_library.c src/psxcore_title.c src/psxcore_vmc.c)
+  target_sources(${EE_BIN} PRIVATE src/psxcore_launch.c src/psxcore_transfer.c src/psxcore_transfer.S src/psxcore_library.c src/psxcore_title.c src/psxcore_vmc.c src/psxcore_discset.c src/psxcore_discset_io.c)
   target_link_libraries(${EE_BIN} PSXCore::core)
   target_compile_definitions(${EE_BIN} PRIVATE LUNA_ENABLE_PSXCORE=1)
   target_link_options(${EE_BIN} PRIVATE -Wl,--defsym=luna_psxcore_heap_limit=1)

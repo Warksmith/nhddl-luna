@@ -271,7 +271,7 @@ TargetList *storageRefresh(TargetList *previous) {
             int length = snprintf(path, sizeof(path), "%s%s", dev->mountpoint,
                                    t->fullPath + relative);
             if (length < 0 || (size_t)length >= sizeof(path)) {
-              free(copy->fullPath); free(copy->name); free(copy->id); free(copy);
+              free(copy->fullPath); free(copy->name); free(copy->id); free(copy->discs); free(copy);
               freeTargetList(part);
               refreshError = -ENAMETOOLONG;
               goto fail;
@@ -279,7 +279,7 @@ TargetList *storageRefresh(TargetList *previous) {
             free(copy->fullPath);
             copy->fullPath = strdup(path);
             if (!copy->fullPath) {
-              free(copy->name); free(copy->id); free(copy);
+              free(copy->name); free(copy->id); free(copy->discs); free(copy);
               freeTargetList(part); goto fail;
             }
           }

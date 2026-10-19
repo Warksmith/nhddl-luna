@@ -1,6 +1,7 @@
 // LUNA supplies existing shared cards to the unchanged PSXCore bootstrap.
 #include "luna_psxcore.h"
 #include "luna_psxcore_library.h"
+#include "luna_psxcore_discset.h"
 #include "luna_psxcore_vmc.h"
 #include "devices/devices.h"
 #include "dprintf.h"
@@ -8,6 +9,7 @@
 #include "storage.h"
 #include "psxcore_hash.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // Match the unchanged bootstrap's firmware profile before leaving the UI.
@@ -39,13 +41,38 @@ static const char *firmwareCheck(const char *path,unsigned index) {
 }
 static int titleError(char *out,size_t size,const char *message) {snprintf(out,size,"%s",message);return -1;}
 int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
-    int createCards,char *error,size_t size,int (*progress)(uint64_t,uint64_t)) {
+    int createCards,int codeValidation,int startDisc,char *error,size_t size,int (*progress)(uint64_t,uint64_t)) {
     if(!target || target->platform!=TARGET_PS1 || !target->device ||
        !(STORAGE_SETTINGS.enabled & target->device->mode) ||
        !((target->device->mode==MODE_ATA && target->device->index==0) ||
          (target->device->mode==MODE_USB && target->device->index<=1)))
         return titleError(error,size,"PS1 games require an enabled internal ATA or USB drive.");
-    const char *path=target->fullPath;
+    if(target->discs && target->discs->error[0])return titleError(error,size,target->discs->error);
+    if(codeValidation<0 || startDisc<0) {
+        ArgumentList saved={0};int result=getTitleLaunchArguments(&saved,target);
+        Argument *option=getArgument(&saved,"luna_ps1_code_validation");
+        if(codeValidation<0)codeValidation=option && !option->isDisabled;
+        option=getArgument(&saved,"luna_ps1_start_disc");
+        if(startDisc<0) {
+            startDisc=0;
+            if(option && !option->isDisabled && option->value) {
+                if(strlen(option->value)!=1 || option->value[0]<'1' || option->value[0]>'4')result=-1;
+                else startDisc=option->value[0]-'1';
+            }
+        }
+        // freeArgumentList owns the list itself, so release stack-list entries here.
+        while(saved.first) {
+            Argument *next=saved.first->next;
+            free(saved.first->arg);free(saved.first->value);free(saved.first);saved.first=next;
+        }
+        if(result)return titleError(error,size,"Could not read PS1 compatibility settings.");
+    }
+    char selectedPath[264];
+    if(target->discs) {
+        if((unsigned)startDisc>=target->discs->count)return titleError(error,size,"The starting disc is unavailable. Choose it again.");
+        snprintf(selectedPath,sizeof(selectedPath),"%.6s%s",target->fullPath,target->discs->paths[startDisc]);
+    } else snprintf(selectedPath,sizeof(selectedPath),"%s",target->fullPath);
+    const char *path=target->discs?selectedPath:target->fullPath;
     LunaPsxVmcSettings settings;const char *reason=lunaPsxVmcLoad(target,&settings,progress);
     if(reason)return titleError(error,size,reason);
     if(selection) {
@@ -60,6 +87,11 @@ int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
         snprintf(asset,sizeof(asset),"%.6s/POPS/%s",path,names[i]);
         reason=firmwareCheck(asset,i);
         if(reason){snprintf(error,size,"%s: %s",reason,asset);return -1;}
+    }
+    NpFileDiscSet discSet={0};
+    if(target->discs) {
+        reason=lunaPsxDiscSetMeasure(target,(unsigned)startDisc,&discSet,progress);
+        if(reason)return titleError(error,size,reason);
     }
     if(settings.mode==LUNA_PS1_CARDS_DEFAULT)createCards=1;
     reason=lunaPsxVmcPrepare(&settings,createCards);
@@ -83,11 +115,21 @@ int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
     }
     if(!saveBackend)return titleError(error,size,"The selected card drive is unavailable.");
     int custom=settings.mode==LUNA_PS1_CARDS_CUSTOM;
-    if(custom) {
-        unsigned char gameVolume[16];char verified[8];
+    unsigned char gameVolume[16]={0};
+    if(custom || target->discs) {
+        char verified[8];
         reason=lunaPsxVmcVolume(settings.gameRoot,gameVolume,1);if(reason)return titleError(error,size,reason);
         reason=lunaPsxVmcFindVolume(gameVolume,verified);if(reason)return titleError(error,size,reason);
         np_file_volume_id_text(gameVolume,discId);np_file_volume_id_text(settings.volume,saveId);
+    }
+    char descriptor[NP_FILE_PATH_BYTES];
+    if(target->discs) {
+        memcpy(discSet.disc_volume,gameVolume,16);
+        np_file_disc_save_binding(cards,!strcmp(saveBackend,"usb")?NP_FILE_BACKEND_USB:NP_FILE_BACKEND_ATA,
+            (uint32_t)strtoul(saveDevice,NULL,10),custom?settings.volume:gameVolume,discSet.save_binding);
+        reason=np_file_disc_set_check(&discSet,sizeof(discSet),path+6,gameVolume,discSet.save_binding);
+        if(!reason)reason=lunaPsxDiscSetPublish(settings.gameRoot,&discSet,descriptor);
+        if(reason)return titleError(error,size,reason);
     }
     char bootstrap[PATH_MAX+1];const char *slash=strrchr(NEUTRINO_ELF_PATH,'/');
     if(!slash || (size_t)(slash-NEUTRINO_ELF_PATH)+sizeof("/psxcore-runtime-bootstrap.elf")>sizeof(bootstrap))
@@ -102,8 +144,10 @@ int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
     // The pinned firmware's direct-file boot needs PSXCore's guarded license
     // adapter. Use its public option; the core validates and owns the change.
     args[count++]="--license";
+    args[count++]=codeValidation?"--code-validation":"--no-code-validation";
+    if(target->discs) {args[count++]="--disc-set";args[count++]=descriptor;}
+    if(custom || target->discs) {args[count++]="--volume-id";args[count++]=discId;}
     if(custom) {
-        args[count++]="--volume-id";args[count++]=discId;
         args[count++]="--save-volume";args[count++]=saveRoot;
         args[count++]="--save-volume-id";args[count++]=saveId;
         args[count++]="--save-backend";args[count++]=saveBackend;
@@ -116,5 +160,5 @@ int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
     return 0;
 }
 int lunaPsxPrepareTitle(Target *target,int createCards,char *error,size_t size,int (*progress)(uint64_t,uint64_t)) {
-    return lunaPsxPrepareTitleCards(target,NULL,createCards,error,size,progress);
+    return lunaPsxPrepareTitleCards(target,NULL,createCards,-1,-1,error,size,progress);
 }

@@ -10,6 +10,18 @@ struct DeviceMapEntry;
 typedef enum { TARGET_PS2 = 0, TARGET_PS1 = 1 } TargetPlatform;
 typedef enum { TARGET_ALL = 0, TARGET_PS2_ONLY, TARGET_PS1_ONLY } TargetFilter;
 
+// A playlist is the library identity; members are paths relative to its volume.
+// Kept independent of PSXCore headers so builds without the core still work.
+#define LUNA_DISC_LIMIT 4
+#define LUNA_DISC_PATH_BYTES 256
+typedef struct {
+  char key[33];
+  unsigned count;
+  char paths[LUNA_DISC_LIMIT][LUNA_DISC_PATH_BYTES];
+  char serials[LUNA_DISC_LIMIT][12];
+  char error[112];
+} TargetDiscSet;
+
 // An entry in TargetList
 typedef struct Target {
   uint16_t idx;           // ISO index (monotonically increasing). Used to uniquely identify the list entry
@@ -18,6 +30,7 @@ typedef struct Target {
   char *id;               // Title ID
   struct DeviceMapEntry *device; // Device entry
   TargetPlatform platform;
+  TargetDiscSet *discs;  // Owned; NULL for an ordinary single-image target.
 
   struct Target *prev; // Previous target in the list
   struct Target *next; // Next target in the list

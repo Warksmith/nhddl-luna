@@ -8,6 +8,7 @@
 #include "devices/title_id.h"
 #ifdef LUNA_ENABLE_PSXCORE
 #include "luna_psxcore_library.h"
+#include "luna_psxcore_discset.h"
 #include "psxcore_vcd.h"
 #endif
 #include <errno.h>
@@ -86,6 +87,10 @@ int findISO(TargetList *result, struct DeviceMapEntry *device) {
   // Get title IDs for each found title
   int metadataResult = processTitleID(result, device);
   if (metadataResult) return metadataResult;
+#ifdef LUNA_ENABLE_PSXCORE
+  metadataResult = lunaPsxGroupTargets(result);
+  if (metadataResult) return metadataResult;
+#endif
 
   if (result->first == NULL) {
     return -ENOENT;
@@ -191,11 +196,14 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
       // Make sure file has .iso extension
       fileext = strrchr(entry->d_name, '.');
       int isVcd = 0;
+      int isPlaylist = 0;
 #ifdef LUNA_ENABLE_PSXCORE
-      isVcd = ((device->mode == MODE_ATA && device->index == 0) ||
-               (device->mode == MODE_USB && device->index <= 1)) && np_vcd_filename(entry->d_name);
+      int ps1Device = (device->mode == MODE_ATA && device->index == 0) ||
+                      (device->mode == MODE_USB && device->index <= 1);
+      isVcd = ps1Device && np_vcd_filename(entry->d_name);
+      isPlaylist = ps1Device && lunaPsxPlaylistFilename(entry->d_name);
 #endif
-      if (isVcd || (fileext && !strcasecmp(fileext, ".iso"))) {
+      if (isVcd || isPlaylist || (fileext && !strcasecmp(fileext, ".iso"))) {
         // Generate full path
         strcat(titlePath, entry->d_name);
 
@@ -206,13 +214,14 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
         title->next = NULL;
         title->fullPath = strdup(titlePath);
         title->device = device;
-        title->platform = isVcd ? TARGET_PS1 : TARGET_PS2;
+        title->platform = isVcd || isPlaylist ? TARGET_PS1 : TARGET_PS2;
+        if (isPlaylist) title->discs = calloc(1, sizeof(*title->discs));
 
         // Get file name without the extension
         int nameLength = (int)(fileext - entry->d_name);
         title->name = calloc(sizeof(char), nameLength + 1);
-        if (!title->fullPath || !title->name) {
-          free(title->fullPath); free(title->name); free(title);
+        if (!title->fullPath || !title->name || (isPlaylist && !title->discs)) {
+          free(title->fullPath); free(title->name); free(title->discs); free(title);
           scanResult = -ENOMEM; goto done;
         }
         strncpy(title->name, entry->d_name, nameLength);
@@ -264,6 +273,7 @@ int processTitleID(TargetList *result, struct DeviceMapEntry *device) {
     }
 #ifdef LUNA_ENABLE_PSXCORE
     if (curTarget->platform == TARGET_PS1) {
+      if (curTarget->discs) { curTarget=curTarget->next; continue; }
       char id[12];
       const char *error = lunaPsxDiscInfo(curTarget->fullPath,id);
       if (error && (!strcmp(error, "disc-open") || !strcmp(error, "disc-read"))) {

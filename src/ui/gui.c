@@ -17,6 +17,7 @@
 #include "ui/handoff.h"
 #include "ui/navigation.h"
 #include "ui/options_menu.h"
+#include "ui/game_options.h"
 #include "ui/view_scroll.h"
 #include "ui/pad.h"
 #include "ui/ui.h"
@@ -1388,6 +1389,10 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       }
       if (view == UI_VIEW_CLASSIC)
         holdClassicDiscRotation(uiNowMs());
+      if (res == STORAGE_UI_REFRESH) {
+        storageRememberSelection(curTarget, view);
+        break;
+      }
       libraryReturnFadeStartMs = uiNowMs();
       setLibraryBackground((LibraryBackground)libraryBackground);
       setGlassColorPreset((GlassColorPreset)glassColorSetting);
@@ -1461,19 +1466,48 @@ static void drawPsxLaunchMessage(const char *message,const char *footer) {
   gsKit_queue_exec(gsGlobal);gsKit_finish();gsKit_sync_flip(gsGlobal);
 }
 static int psxPrepareProgress(uint64_t completed,uint64_t total) {
+  static uint32_t lastDraw;
+  uint32_t now=uiNowMs();
+  if(total && completed!=total && now-lastDraw<100)return (readInput()&PAD_TRIANGLE)!=0;
+  lastDraw=now;
   char message[128];
   if(total)snprintf(message,sizeof(message),"%s\n%u%% (%u / %u MiB)",
-    lunaText("Checking PS1 memory cards..."),(unsigned)(completed*100/total),
+    lunaText("Validating PS1 game..."),(unsigned)(completed*100/total),
     (unsigned)(completed>>20),(unsigned)(total>>20));
   else snprintf(message,sizeof(message),"%s",lunaText("Preparing PS1 game..."));
   drawPsxLaunchMessage(message,lunaText("Press Triangle to cancel"));
   return (readInput()&PAD_TRIANGLE)!=0;
 }
-int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection) {
+int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection,
+                     ArgumentList *arguments) {
   char error[192];int createCards=0;
+  ArgumentList saved={0};
+  if(!arguments) {
+    int result=getTitleLaunchArguments(&saved,target);
+    if(result) {
+      while(saved.first){Argument *next=saved.first->next;free(saved.first->arg);free(saved.first->value);free(saved.first);saved.first=next;}
+      for(;;){drawPsxLaunchMessage(lunaText("Could not read PS1 game settings."),lunaText("Press Triangle to return"));if(readInput()&PAD_TRIANGLE)return 0;}
+    }
+    arguments=&saved;
+  }
+  LunaGameOptions options;lunaGameOptionsRead(&options,arguments);
+  int codeValidation=options.ps1CodeValidation,startDisc=options.ps1StartDisc;
+  while(saved.first){Argument *next=saved.first->next;free(saved.first->arg);free(saved.first->value);free(saved.first);saved.first=next;}
+  if(target->discs && !target->discs->error[0] && startDisc>=0 && (unsigned)startDisc<target->discs->count) {
+    static const char *const directions[]={"Up","Right","Down","Left"};
+    char message[512];int used=snprintf(message,sizeof(message),"%s %d\n\n%s\n",lunaText("Start disc"),startDisc+1,
+      lunaText("To swap in-game, press L2 + R2 + Select with a direction, then release:"));
+    for(unsigned i=0;i<target->discs->count;++i)
+      used+=snprintf(message+used,sizeof(message)-(size_t)used,"%s: %s %u\n",lunaText(directions[i]),lunaText("Disc"),
+        ((unsigned)startDisc+i)%target->discs->count+1);
+    for(;;) {
+      drawPsxLaunchMessage(message,lunaText("Cross: launch   Triangle: return"));
+      int input=readInput();if(input&PAD_TRIANGLE)return 0;if(input&PAD_CROSS)break;
+    }
+  }
   for(;;) {
     if(psxPrepareProgress(0,0))return 0;
-    int result=lunaPsxPrepareTitleCards(target,selection,createCards,error,sizeof(error),psxPrepareProgress);
+    int result=lunaPsxPrepareTitleCards(target,selection,createCards,codeValidation,startDisc<0?4:startDisc,error,sizeof(error),psxPrepareProgress);
     if(!result)lunaPsxExecute();
     for(;;) {
       drawPsxLaunchMessage(error,result==1?NULL:lunaText("Press Triangle to return"));
@@ -1489,7 +1523,7 @@ int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection)
 int uiLaunchTitleWithCheats(Target *target, ArgumentList *arguments,
                            const LunaCheatSettings *cheats) {
 #ifdef LUNA_ENABLE_PSXCORE
-  if(target && target->platform==TARGET_PS1)return uiLaunchPs1Cards(target,NULL);
+  if(target && target->platform==TARGET_PS1)return uiLaunchPs1Cards(target,NULL,arguments);
 #endif
   int ownedArguments = arguments == NULL;
   if (ownedArguments) arguments = loadLaunchArgumentLists(target);

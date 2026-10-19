@@ -50,6 +50,12 @@ uint8_t lunaGetOplCompatMask(ArgumentList *arguments) {
 
 void lunaGameOptionsRead(LunaGameOptions *options, ArgumentList *arguments) {
   memset(options, 0, sizeof(*options));
+  options->ps1CodeValidation = argumentEnabled(arguments, "luna_ps1_code_validation");
+  Argument *startDisc = getArgument(arguments, "luna_ps1_start_disc");
+  if (startDisc && !startDisc->isDisabled) {
+    const char *value = startDisc->value;
+    options->ps1StartDisc = value && value[0]>='1' && value[0]<='4' && !value[1] ? value[0]-'1' : -1;
+  }
   Argument *compat = getArgument(arguments, "gc");
   if (compat != NULL && !compat->isDisabled && compat->value != NULL) {
     for (int i = 0; i < LUNA_GAME_COMPAT_COUNT; i++)
@@ -131,6 +137,14 @@ static int setArgument(ArgumentList *arguments, const char *name, const char *va
   return 1;
 }
 
+int lunaGameOptionsSetPs1Disc(LunaGameOptions *options, ArgumentList *arguments, int disc) {
+  if (disc<0 || disc>=LUNA_DISC_LIMIT) return 0;
+  char value[2] = {(char)('1'+disc), 0};
+  if (!setArgument(arguments, "luna_ps1_start_disc", value, 1)) return 0;
+  options->ps1StartDisc = disc;
+  return 1;
+}
+
 int lunaGameOptionsSetVideoMode(LunaGameOptions *options,
                                ArgumentList *arguments, int opl, int mode) {
   if (mode < 0 || mode >= lunaGameVideoModeCount(opl))
@@ -164,6 +178,14 @@ int lunaGameOptionsSetVMC(LunaGameOptions *options, ArgumentList *arguments,
 
 int lunaGameOptionsChange(LunaGameOptions *options, ArgumentList *arguments,
                           LunaGameRow row, int direction) {
+  if (row == LUNA_GAME_PS1_CODE_VALIDATION) {
+    int enabled = !options->ps1CodeValidation;
+    if (!setArgument(arguments, "luna_ps1_code_validation", "", enabled))
+      return 0;
+    getArgument(arguments, "luna_ps1_code_validation")->isGlobal = 0;
+    options->ps1CodeValidation = enabled;
+    return 1;
+  }
   if (row == LUNA_GAME_OPL_VIDEO_MODE) {
     int mode = options->oplVideoMode < 0 ? 0 :
         (options->oplVideoMode + (direction < 0 ? LUNA_OPL_VIDEO_MODE_COUNT - 1 : 1)) %
@@ -311,6 +333,8 @@ int lunaGameOptionsCyclePS2Logo(LunaGameOptions *options,
 }
 
 const char *lunaGameOptionsValue(const LunaGameOptions *options, LunaGameRow row) {
+  if (row == LUNA_GAME_PS1_CODE_VALIDATION)
+    return options->ps1CodeValidation ? lunaText("On") : lunaText("Off");
   if (row == LUNA_GAME_NEUTRINO_DISABLE_IGR)
     return options->neutrinoIgrDisabled ? lunaText("On") : lunaText("Off");
   if (row >= LUNA_GAME_OPL_ACCURATE_READS && row <= LUNA_GAME_OPL_DISABLE_IGR)

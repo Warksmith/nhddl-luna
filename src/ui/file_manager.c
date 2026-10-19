@@ -2632,6 +2632,7 @@ static void uiVMCManagerLoop(void) {
 
 #ifdef LUNA_ENABLE_PSXCORE
 #include "ps1_vmc.inc"
+#include "ps1_discs.inc"
 #endif
 
 static int storageRow(int index, char *name, size_t nameSize,

@@ -12,7 +12,7 @@ struct LunaPsxVmcSettings;
 #define LUNA_PSX_STUB 0x01402000u
 #define LUNA_PSX_STACK 0x01410000u
 #define LUNA_PSX_MAX_ARGS 32u
-#define LUNA_PSX_ARGUMENT_BYTES 1536u
+#define LUNA_PSX_ARGUMENT_BYTES 3072u
 typedef struct {
     NpElf elf;
     uint32_t argc, argv[LUNA_PSX_MAX_ARGS];
@@ -30,8 +30,10 @@ void lunaPsxExecute(void) __attribute__((noreturn));
 // 0: staged, 1: missing cards require explicit creation, -1: preparation error.
 int lunaPsxPrepareTitle(struct Target *target, int createCards, char *error, size_t size,
                         int (*progress)(uint64_t completed, uint64_t total));
+// codeValidation: 0 = off, 1 = on, -1 = saved choice (default off).
+// startDisc: zero based, or -1 for the saved choice (default Disc 1).
 int lunaPsxPrepareTitleCards(struct Target *target, const struct LunaPsxVmcSettings *selection,
-    int createCards, char *error, size_t size,
+    int createCards, int codeValidation, int startDisc, char *error, size_t size,
     int (*progress)(uint64_t completed, uint64_t total));
 #ifdef LUNA_PSXCORE_DEVELOPMENT
 // Local HostFS file: bootstrap path, one CLI argument per line, optional final

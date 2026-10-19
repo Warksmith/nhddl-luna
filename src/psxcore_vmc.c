@@ -1,6 +1,7 @@
 // LUNA provisions shared PS1 cards; unchanged PSXCore owns game-time IO.
 #include "luna_psxcore_vmc.h"
 #include "luna_psxcore_library.h"
+#include "luna_psxcore_discset.h"
 #include "devices/devices.h"
 #include "storage.h"
 #include "psxcore_file.h"
@@ -206,13 +207,28 @@ static const char *selectionCheck(const VmcSelection *r, const LunaPsxVmcSetting
 const char *lunaPsxVmcLoad(Target *target, LunaPsxVmcSettings *s, LunaPsxVmcProgress progress) {
   (void)progress; memset(s,0,sizeof(*s));
   if (!target || target->platform != TARGET_PS1 || !target->fullPath ||
-      !lunaPsxVmcDevice(target->device,s->gameRoot) || strncmp(target->fullPath,s->gameRoot,6) ||
-      !np_file_path_valid(target->fullPath+6,NP_FILE_PATH_BYTES,0)) return "This PS1 game needs supported local storage.";
-  snprintf(s->gamePath,sizeof(s->gamePath),"%s",target->fullPath+6);
+      !lunaPsxVmcDevice(target->device,s->gameRoot) || strncmp(target->fullPath,s->gameRoot,6))
+    return "This PS1 game needs supported local storage.";
+  const char *identityError=lunaPsxGameIdentity(target,s->gamePath);if(identityError)return identityError;
   char path[160], stage[168]; settingsPath(s,path); snprintf(stage,sizeof(stage),"%s.new",path);
   if (!missing(stage)) return "An interrupted card selection needs recovery. Preserve its .new file.";
   snprintf(stage,sizeof(stage),"%s.prev",path);
-  if (missing(path)) return missing(stage) ? NULL : "The previous card selection needs recovery.";
+  if (missing(path)) {
+    if(!missing(stage))return "The previous card selection needs recovery.";
+    if(target->discs) {
+      LunaPsxVmcSettings first={0};
+      for(unsigned i=0;i<target->discs->count;++i) {
+        char member[264];snprintf(member,sizeof(member),"%s%s",s->gameRoot,target->discs->paths[i]);
+        Target disc=*target;disc.fullPath=member;disc.discs=NULL;
+        LunaPsxVmcSettings choice;const char *error=lunaPsxVmcLoad(&disc,&choice,progress);if(error)return error;
+        if(!i)first=choice;
+        else if(choice.mode!=first.mode || strcmp(choice.key,first.key) || memcmp(choice.volume,first.volume,16))
+          return "Discs use different cards. Reset this set's selection, then choose its card pair.";
+      }
+      if(target->discs->count) {s->mode=first.mode;memcpy(s->key,first.key,sizeof(s->key));memcpy(s->volume,first.volume,16);}
+    }
+    return NULL;
+  }
   VmcSelection record; const char *error = readExact(path,&record,sizeof(record));
   if (!error) error = selectionCheck(&record,s);
   if (error) return error;
@@ -220,7 +236,7 @@ const char *lunaPsxVmcLoad(Target *target, LunaPsxVmcSettings *s, LunaPsxVmcProg
   return NULL;
 }
 const char *lunaPsxVmcSave(const LunaPsxVmcSettings *s) {
-  if (!rootValid(s->gameRoot) || !np_file_path_valid(s->gamePath,sizeof(s->gamePath),0)) return "The game path is invalid.";
+  if (!rootValid(s->gameRoot) || !np_file_path_valid(s->gamePath,sizeof(s->gamePath),1)) return "The game path is invalid.";
   VmcSelection record={0}; record.magic=0x33434d4c; record.version=1; record.mode=s->mode;
   memcpy(record.key,s->key,sizeof(record.key)); memcpy(record.volume,s->volume,16);
   memcpy(record.gamePath,s->gamePath,sizeof(record.gamePath));
@@ -245,13 +261,19 @@ const char *lunaPsxVmcSave(const LunaPsxVmcSettings *s) {
 }
 const char *lunaPsxVmcReset(Target *target) {
   LunaPsxVmcSettings s; (void)lunaPsxVmcLoad(target,&s,NULL);
-  if(!rootValid(s.gameRoot) || !np_file_path_valid(s.gamePath,sizeof(s.gamePath),0))return "This game's card selection cannot be reset.";
+  if(!rootValid(s.gameRoot) || !np_file_path_valid(s.gamePath,sizeof(s.gamePath),1))return "This game's card selection cannot be reset.";
   char path[160],source[168],archived[224];settingsPath(&s,path);
   const char *suffix[]={"",".new",".prev"};uint64_t stamp=GetTimerSystemTime();
   for(unsigned i=0;i<3;++i) {
     snprintf(source,sizeof(source),"%s%s",path,suffix[i]);if(missing(source))continue;
     snprintf(archived,sizeof(archived),"%s.saved-%llu%s",path,(unsigned long long)stamp,suffix[i]);
     if(!missing(archived) || fileXioRename(source,archived)<0)return "Could not archive the selection. Retry before choosing cards.";
+  }
+  if(target->discs) {
+    // Persist an explicit default after resolving a migration conflict; never
+    // rewrite any member's old selection or its memory-card images.
+    s.mode=LUNA_PS1_CARDS_DEFAULT;memset(s.key,0,sizeof(s.key));memset(s.volume,0,16);
+    return lunaPsxVmcSave(&s);
   }
   return NULL;
 }

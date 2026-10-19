@@ -15,6 +15,8 @@ int uiPs1VmcPicker(Target *target, LunaPsxVmcSettings *settings);
 int uiPs1VmcCreate(Target *target, LunaPsxVmcSettings *settings);
 void uiPs1VmcManage(const LunaPsxVmcSettings *settings, int slot);
 void uiPs1VmcDescribe(const LunaPsxVmcSettings *settings, char name[64], char slots[2][32]);
+// Returns STORAGE_UI_REFRESH only after saving a playlist and requesting a scan.
+int uiPs1DiscManage(Target *target);
 #endif
 
 #endif

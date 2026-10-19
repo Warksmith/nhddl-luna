@@ -53,10 +53,13 @@ Target *copyTarget(Target *src) {
   copy->fullPath = strdup(src->fullPath);
   copy->name = strdup(src->name);
   copy->id = src->id ? strdup(src->id) : NULL;
-  if (!copy->fullPath || !copy->name || (src->id && !copy->id)) {
+  copy->discs = src->discs ? malloc(sizeof(*src->discs)) : NULL;
+  if (copy->discs) *copy->discs = *src->discs;
+  if (!copy->fullPath || !copy->name || (src->id && !copy->id) || (src->discs && !copy->discs)) {
     free(copy->fullPath);
     free(copy->name);
     free(copy->id);
+    free(copy->discs);
     free(copy);
     return NULL;
   }
@@ -206,6 +209,7 @@ Target *freeTarget(TargetList *targetList, Target *target) {
 
   free(target->fullPath);
   free(target->name);
+  free(target->discs);
   if (target->id != NULL)
     free(target->id);
 
