@@ -135,14 +135,10 @@ static int browserSelectorY(BrowserSelector *menu, int selected, int first, int 
   return (menu->fromY + (menu->toY - menu->fromY) * progress / 1000) / 256;
 }
 
-static void drawBrowserSheet(int fileManager) {
+static void drawBrowserSheetPanel(int panelLeft, int panelTop,
+                                   int panelRight, int panelBottom) {
   int width = gsGlobal->Width;
   int height = gsGlobal->Height;
-  int panelLeft = fileManager ? FILE_MANAGER_GLASS_MARGIN : 30;
-  int panelTop = fileManager ? FILE_MANAGER_GLASS_MARGIN : 78;
-  int panelRight = width - panelLeft;
-  int panelBottom = fileManager ? height - FILE_MANAGER_GLASS_MARGIN
-                                : height - footerHeight + 3;
   gsGlobal->PrimAlphaEnable = GS_SETTING_OFF;
   gsKit_set_test(gsGlobal, GS_ATEST_OFF);
   gsKit_prim_sprite(gsGlobal, 0, 0, width, height, 0,
@@ -156,6 +152,14 @@ static void drawBrowserSheet(int fileManager) {
                     panelRight - 2, panelBottom - 2, 1,
                     glassPresetColor(0x02, 0x08, 0x18, 0x48));
   drawGlassPanel(panelLeft, panelTop, panelRight, panelBottom, 2);
+}
+
+static void drawBrowserSheet(int fileManager) {
+  int margin = fileManager ? FILE_MANAGER_GLASS_MARGIN : 30;
+  drawBrowserSheetPanel(margin, fileManager ? FILE_MANAGER_GLASS_MARGIN : 78,
+                       gsGlobal->Width - margin,
+                       fileManager ? gsGlobal->Height - FILE_MANAGER_GLASS_MARGIN
+                                   : gsGlobal->Height - footerHeight + 3);
 }
 
 static void presentBrowserFrame(void) {
@@ -2771,10 +2775,53 @@ static int mainMenuRow(int index, char *name, size_t nameSize,
                        index == (hasLibrary ? 6 : 5) ? lunaText("Shutdown") : lunaText("Exit LUNA"));
   snprintf(name, nameSize, "%s", label);
   detail[0] = '\0';
-  *cardArt = index == 0 ? CARD_ART_FILE_EXPLORER :
-             index == 1 ? CARD_ART_MEMORY_CARD_MENU : CARD_ART_NONE;
+  *cardArt = CARD_ART_NONE;
   (void)detailSize;
   return 1;
+}
+
+static void drawMainMenuFrame(const char *subtitle, int count, int selected,
+                               MainMenuContext *menu, BrowserSelector *selector,
+                               int confirmShutdown) {
+  int lineHeight = getFontLineHeight();
+  int rowStep = lineHeight + lineHeight / 3;
+  int listTop = 112;
+  int panelWidth = 320;
+  char labels[7][128];
+  for (int index = 0; index < count; ++index) {
+    char detail[1]; CardArtType art;
+    mainMenuRow(index, labels[index], sizeof(labels[index]), detail, sizeof(detail),
+                &art, menu);
+    int width = (int)getLineWidth(labels[index]) + 64;
+    if (width > panelWidth) panelWidth = width;
+  }
+  int maxWidth = gsGlobal->Width - 2 * (keepoutArea + 30);
+  if (panelWidth > maxWidth) panelWidth = maxWidth;
+  int left = (gsGlobal->Width - panelWidth) / 2;
+  int right = left + panelWidth;
+  int selectorY = browserSelectorY(selector, selected, 0,
+                                   listTop + selected * rowStep);
+  gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
+  drawBrowserSheetPanel(left, 78, right, gsGlobal->Height - footerHeight + 3);
+  drawTextWindow(left, headerHeight - lineHeight, right, headerHeight + 2,
+                 0, HeaderTextColor, ALIGN_HCENTER, "LUNA");
+  drawTextWindow(left + 16, 82, right - 16, 82 + lineHeight,
+                 0, FontMainColor, ALIGN_HCENTER, subtitle);
+  drawMenuRowSelector(left + 12, selectorY, right - 12);
+  for (int index = 0; index < count; ++index) {
+    char fitted[128];
+    fileManagerFitText(labels[index], panelWidth - 48, fitted, sizeof(fitted), 0);
+    int y = listTop + index * rowStep;
+    drawTextWindow(left + 24, y, right - 24, y + lineHeight, 0,
+                   index == selected ? GS_SETREG_RGBA(0xF0, 0xFA, 0xFF, 0x80)
+                                     : HeaderTextColor,
+                   ALIGN_HCENTER, fitted);
+  }
+  if (confirmShutdown)
+    drawTextWindow(left + 16, gsGlobal->Height - footerHeight - lineHeight,
+                   right - 16, gsGlobal->Height - footerHeight, 0,
+                   HeaderTextColor, ALIGN_HCENTER, lunaText("Power off the console?"));
+  presentBrowserFrame();
 }
 
 int uiMainMenuLoop(int hasLibrary) {
@@ -2786,17 +2833,9 @@ int uiMainMenuLoop(int hasLibrary) {
     int scanFailed = 0;
     for (int source = 0; source < STORAGE_SOURCE_COUNT; source++)
       if (STORAGE_STATUS[source].error) scanFailed = 1;
-    drawBrowserFrameSelected("LUNA", hasLibrary ? lunaText("Main menu") :
+    drawMainMenuFrame(hasLibrary ? lunaText("Main menu") :
                      scanFailed ? lunaText("Scan failed") : lunaText("No games found"),
-                     hasLibrary ? lunaText("Browse storage or return to your games.")
-                                : scanFailed ? lunaText("Open Storage Devices to retry the scan.")
-                                : lunaText("Browse storage even without a game library."),
-                     hasLibrary ?
-                         PROMPT_TWO(ICON_CROSS, lunaText("Select"), ICON_TRIANGLE, lunaText("Back")) :
-                         PROMPT_ONE(ICON_CROSS, lunaText("Select")),
-                     count, selected, 0,
-                     selected == 0 || selected == 1 ? 220 : 0,
-                     mainMenuRow, &menu, &selector);
+                     count, selected, &menu, &selector, 0);
     int input = readInput();
     if ((input & (PAD_TRIANGLE | PAD_CIRCLE)) && hasLibrary)
       return 0;
@@ -2822,11 +2861,8 @@ int uiMainMenuLoop(int hasLibrary) {
       else if (hasLibrary && selected == 4)
         return 0;
       else if (selected == count - 1) {
-        drawBrowserFrameSelected("LUNA", lunaText("Confirm shutdown"),
-                         lunaText("Power off the console?"),
-                         PROMPT_TWO(ICON_CROSS, lunaText("Shutdown"),
-                                    ICON_CIRCLE, lunaText("Cancel")),
-                         count, selected, 0, 0, mainMenuRow, &menu, &selector);
+        drawMainMenuFrame(lunaText("Confirm shutdown"), count, selected,
+                           &menu, &selector, 1);
         if (waitForInput(PAD_CROSS | PAD_CIRCLE | PAD_TRIANGLE) & PAD_CROSS) {
           powerOffConsole();
           while (1)

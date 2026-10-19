@@ -158,9 +158,6 @@ void drawOrbit(TargetList *titles, int selectedTitleIdx, GSTEXTURE **covers, int
   } else {
     drawSharedLibraryBackground(frameNowMs);
   }
-  drawTextWindow(keepoutArea + 10, headerHeight - getFontLineHeight(),
-                 gsGlobal->Width - keepoutArea, 0, 6,
-                 HeaderTextColor, ALIGN_LEFT, lunaText("ORBIT"));
   if (randomActive)
     drawTextWindow(gsGlobal->Width / 2, headerHeight - getFontLineHeight(),
                    gsGlobal->Width - keepoutArea - 8, 0, 6,

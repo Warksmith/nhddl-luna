@@ -426,7 +426,6 @@
   {"Scan failed", "Falló la búsqueda", "Falha na busca"},
   {"Scanning %s...\n", "Buscando en %s...\n", "Buscando em %s...\n"},
   {"Scroll", "Desplazamiento", "Rolagem"},
-  {"Scroll (Experimental)", "Desplazamiento (experimental)", "Rolagem (experimental)"},
   {"Scroll path", "Desplazar ruta", "Rolar caminho"},
   {"Select", "Seleccionar", "Selecionar"},
   {"Select a card from /VMC on this drive.", "Elige una tarjeta de /VMC en esta unidad.", "Selecione um cartão de /VMC nesta unidade."},
