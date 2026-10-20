@@ -555,7 +555,7 @@ char *resolveRootDevice(char *argv0) {
     return result;
   } else if (device == MODE_BDM) {
     printf("Resolve root: probing root path for BDM device\n");
-    initModules(MODE_ATA | MODE_USB | MODE_MX4SIO);
+    initModules(MODE_ATA | MODE_USB);
 
     if (argv0[4] == ':' || argv0[6] != '/') {
       // argv[0] is "mass:" or doesn't have a trailing slash, fix it to "mass?:/"
@@ -566,22 +566,28 @@ char *resolveRootDevice(char *argv0) {
       snprintf(result, arglen, "mass?:/%s", &argv0[startPos]);
     }
 
-    int fd = 0;
-    int attempts = 0;
-    for (int i = 0; i < 8; i++) {
-      result[4] = '0' + i;
-      printf("Resolve root: probing %s\n", result);
-      if (probePath(result, 2)) {
-        printf("Resolve root: failed to probe\n");
-        return result; // No BDM devices were found
+    // Prefer the supplied device, then allow for BDM renumbering after reset.
+    // A missing file on one volume does not rule out the remaining volumes.
+    char originalIndex = argv0[4] >= '0' && argv0[4] <= '9' ? argv0[4] : '0';
+    for (int pass = 0; pass < 2; pass++) {
+      if (pass) {
+        // Loading an unused memory-card adapter can block USB startup.
+        // Keep MX4SIO boot support as a separate, clean-driver fallback.
+        printf("Resolve root: trying MX4SIO boot fallback\n");
+        initStorageModules(MODE_MX4SIO, 1);
       }
-      fd = open(result, O_RDONLY);
-      if (fd >= 0) {
-        printf("Resolve root: found root path\n");
-        close(fd);
-        return result;
+      for (int i = 0; i < 10; i++) {
+        result[4] = '0' + (originalIndex - '0' + i) % 10;
+        printf("Resolve root: probing %s\n", result);
+        if (!probePath(result, 2)) {
+          printf("Resolve root: found root path\n");
+          return result;
+        }
       }
     }
+    // Keep the original directory available to the normal config fallbacks.
+    result[4] = originalIndex;
+    printf("Resolve root: boot file not found on any BDM volume\n");
   }
 
   return result;
