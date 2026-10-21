@@ -29,11 +29,21 @@ set(LOCAL_IRX_FILES
     udpfs_ioman
 )
 
+# A prior local diagnostic build may leave debug objects in a module directory.
+file(GLOB_RECURSE LUNA_IOP_INPUTS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/iop/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/iop/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/iop/*.S"
+    "${CMAKE_CURRENT_SOURCE_DIR}/iop/Makefile"
+    "${CMAKE_CURRENT_SOURCE_DIR}/iop/*.make")
+
 # mmceman
 add_custom_command(
     OUTPUT
         ${CMAKE_CURRENT_BINARY_DIR}/mmceman.irx
-    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/mmceman/mmceman
+    DEPENDS ${LUNA_IOP_INPUTS} ${CMAKE_CURRENT_SOURCE_DIR}/irx.cmake
+    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/mmceman/mmceman clean DEBUG=0 LOCAL_UDPTTY=0
+    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/mmceman/mmceman DEBUG=0 LOCAL_UDPTTY=0
     COMMAND ${CMAKE_COMMAND} -E rename
         ${CMAKE_CURRENT_SOURCE_DIR}/iop/mmceman/mmceman/irx/mmceman.irx
         ${CMAKE_CURRENT_BINARY_DIR}/mmceman.irx
@@ -47,7 +57,9 @@ add_custom_command(
 add_custom_command(
     OUTPUT
         ${CMAKE_CURRENT_BINARY_DIR}/smap.irx
-    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/smap
+    DEPENDS ${LUNA_IOP_INPUTS} ${CMAKE_CURRENT_SOURCE_DIR}/irx.cmake
+    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/smap clean DEBUG=0 LOCAL_UDPTTY=0
+    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/smap DEBUG=0 LOCAL_UDPTTY=0
     COMMAND ${CMAKE_COMMAND} -E rename
         ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/smap/irx/smap.irx
         ${CMAKE_CURRENT_BINARY_DIR}/smap.irx
@@ -58,7 +70,9 @@ add_custom_command(
 add_custom_command(
     OUTPUT
         ${CMAKE_CURRENT_BINARY_DIR}/ministack.irx
-    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/ministack
+    DEPENDS ${LUNA_IOP_INPUTS} ${CMAKE_CURRENT_SOURCE_DIR}/irx.cmake
+    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/ministack clean DEBUG=0 LOCAL_UDPTTY=0
+    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/ministack DEBUG=0 LOCAL_UDPTTY=0
     COMMAND ${CMAKE_COMMAND} -E rename
         ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/ministack/irx/ministack.irx
         ${CMAKE_CURRENT_BINARY_DIR}/ministack.irx
@@ -69,7 +83,9 @@ add_custom_command(
 add_custom_command(
     OUTPUT
         ${CMAKE_CURRENT_BINARY_DIR}/udpfs_ioman.irx
-    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/udpfs UDPFS_IOMAN=1
+    DEPENDS ${LUNA_IOP_INPUTS} ${CMAKE_CURRENT_SOURCE_DIR}/irx.cmake
+    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/udpfs clean DEBUG=0 LOCAL_UDPTTY=0
+    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/udpfs UDPFS_IOMAN=1 DEBUG=0 LOCAL_UDPTTY=0
     COMMAND ${CMAKE_COMMAND} -E rename
         ${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/udpfs/irx/udpfs_ioman.irx
         ${CMAKE_CURRENT_BINARY_DIR}/udpfs_ioman.irx

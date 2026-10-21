@@ -1,7 +1,6 @@
 // Original LUNA code: Danny Nunez (dnunezx) 2026
 #include "ui/texture_budget.h"
 #include "ui/collection_art.h"
-#include "dprintf.h"
 #include <malloc.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -51,8 +50,6 @@ int fitTextureToVram(const GSGLOBAL *gs, GSTEXTURE *texture) {
         scaled[((size_t)y * width + x) * 4 + channel] = sum[channel] / samples;
     }
   }
-  DPRINTF("Artwork resized: %dx%d -> %dx%d (budget=%uKiB)\n",
-          texture->Width, texture->Height, width, height, (unsigned)(budget / 1024));
   free(texture->Mem);
   texture->Mem = (void *)scaled;
   texture->Width = width;
@@ -73,8 +70,6 @@ int bindTextureSafe(GSGLOBAL *gs, GSTEXTURE *texture) {
                          texture->PSM == GS_PSM_T8 ? 16 : 2, texture->ClutPSM) : 0;
   // Subtract only after checking size to avoid overflow/underflow.
   if (size == 0 || size > capacity || clutSize > capacity - size) {
-    DPRINTF("Artwork upload skipped: %dx%d exceeds texture pool (%uKiB)\n",
-            texture->Width, texture->Height, (unsigned)(capacity / 1024));
     return 0;
   }
   gsKit_TexManager_bind(gs, texture);

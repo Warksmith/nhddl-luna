@@ -7,7 +7,6 @@
 #include "ui/wallpapers.h"
 #include "ui/ps2_menu_scene.h"
 #include "options.h"
-#include "dprintf.h"
 #include <gsInline.h>
 #include <math.h>
 #include <stdio.h>
@@ -16,7 +15,6 @@
 
 static GlassColorPreset glassColorPreset = GLASS_COLOR_ORIGINAL;
 static LibraryBackground libraryBackground = LIBRARY_BACKGROUND_STARS;
-static ScrollBackground scrollBackground = SCROLL_BACKGROUND_SYSTEM;
 static u32 fogPixels[128 * 128] __attribute__((aligned(128)));
 static u32 bumpPixels[64 * 64] __attribute__((aligned(128)));
 static GSTEXTURE fogTexture;
@@ -70,7 +68,6 @@ void initSystemConfigCapture(void) {
   u32 captureVram = gsKit_vram_alloc(gsGlobal, workSize * 2 + zSize,
                                     GSKIT_ALLOC_SYSBUFFER);
   if (captureVram == GSKIT_ALLOC_ERROR) {
-    DPRINTF("LUNA: no VRAM for System Configuration capture\n");
     return;
   }
   for (int i = 0; i < 2; i++) {
@@ -207,12 +204,10 @@ static int loadBiosFogTexture(void) {
   }
   fclose(rom);
   if (result) {
-    DPRINTF("LUNA: failed to load BIOS TEXOFOG0\n");
     return -1;
   }
   tunnelInitTexture(&fogTexture, fogPixels, 128, 128);
   biosFogTextureLoaded = 1;
-  DPRINTF("LUNA: loaded BIOS TEXOFOG0\n");
   return 0;
 }
 
@@ -229,7 +224,6 @@ static int loadBiosCubeTexture(void) {
                tunnelExpandResource(rom, bumpOffset, bumpSize, expanded, sizeof(expanded));
   fclose(rom);
   if (result) {
-    DPRINTF("LUNA: failed to load BIOS TEXCBUMP\n");
     return -1;
   }
   for (int i = 0; i < 64 * 64; i++) {
@@ -238,7 +232,6 @@ static int loadBiosCubeTexture(void) {
   }
   tunnelInitTexture(&bumpTexture, bumpPixels, 64, 64);
   biosCubeTextureLoaded = 1;
-  DPRINTF("LUNA: loaded BIOS TEXCBUMP\n");
   return 0;
 }
 
@@ -285,7 +278,6 @@ static int loadBiosConfigTextures(void) {
   }
   fclose(rom);
   if (result) {
-    DPRINTF("LUNA: failed to load BIOS System Configuration textures\n");
     return -1;
   }
   tunnelInitTexture(&configWallTexture, configWallPixels, 128, 128);
@@ -297,7 +289,6 @@ static int loadBiosConfigTextures(void) {
   }
   tunnelInitTexture(&configInverseTexture, configInversePixels, 64, 64);
   biosConfigTexturesLoaded = 1;
-  DPRINTF("LUNA: loaded BIOS TEXCKABE, TEXCFLOW, TEXCBUMP, TEXCREFA\n");
   return 0;
 }
 
@@ -333,7 +324,6 @@ static int loadBiosConfigGeometry(void) {
   if (rom == NULL || fseek(rom, 0, SEEK_END)) {
     if (rom != NULL)
       fclose(rom);
-    DPRINTF("LUNA: failed to open BIOS OSDSYS geometry\n");
     return -1;
   }
   const long fileSize = ftell(rom);
@@ -361,11 +351,9 @@ static int loadBiosConfigGeometry(void) {
   }
   fclose(rom);
   if (result) {
-    DPRINTF("LUNA: failed to extract BIOS OSDSYS rod mesh\n");
     return -1;
   }
   biosConfigGeometryLoaded = 1;
-  DPRINTF("LUNA: loaded 16-face BIOS OSDSYS rod mesh\n");
   return 0;
 }
 
@@ -388,18 +376,6 @@ int setLibraryBackground(LibraryBackground background) {
 
 LibraryBackground getLibraryBackground(void) {
   return libraryBackground;
-}
-
-void setScrollBackground(ScrollBackground background) {
-  if (background < SCROLL_BACKGROUND_SYSTEM || background >= SCROLL_BACKGROUND_COUNT)
-    background = SCROLL_BACKGROUND_SYSTEM;
-  if (scrollBackground != background)
-    releaseScrollBackground();
-  scrollBackground = background;
-}
-
-ScrollBackground getScrollBackground(void) {
-  return scrollBackground;
 }
 
 void setGlassColorPreset(GlassColorPreset preset) {

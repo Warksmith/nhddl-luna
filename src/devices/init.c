@@ -1,6 +1,5 @@
 #include "devices/init.h"
 #include "common.h"
-#include "dprintf.h"
 #include "ui/ui.h"
 #include "ui/ambient.h"
 #include "storage.h"
@@ -194,7 +193,6 @@ int initModules(ModeType modeType) {
   // Skip rebooting IOP if modules were loaded previously
   if (!loadedModules) {
     ambientForgetDrivers();
-    DPRINTF("Rebooting IOP\n");
     if (isWarmReboot)
       fileXioExit();
 
@@ -235,11 +233,10 @@ int initModules(ModeType modeType) {
           storageFailures |= modeType & moduleList[i].mode;
           modeType &= ~(moduleList[i].mode);
           LAUNCHER_OPTIONS.mode &= ~(moduleList[i].mode);
-          DPRINTF("Failed to initialize module %s: %d\n", moduleList[i].name, ret);
           continue;
         }
 
-        uiSplashLogString(LEVEL_ERROR, "Failed to initialize module %s: %d\n", moduleList[i].name, ret);
+        uiSplashError("Failed to initialize module %s: %d\n", moduleList[i].name, ret);
         return ret;
       }
       loadedModules |= (1 << i);
@@ -266,7 +263,6 @@ int initModules(ModeType modeType) {
 int loadModule(ModuleListEntry *mod) {
   int ret, iopret = 0;
 
-  uiSplashLogString(LEVEL_INFO_NODELAY, "Loading %s\n", mod->name);
 
   // If module has an arugment function, execute it
   if (mod->argumentFunction != NULL) {
@@ -303,7 +299,6 @@ int parseIPConfig() {
 
   if ((ipconfigFd < 0) || count <= 0) {
     if (LAUNCHER_OPTIONS.mode & MODE_UDPFS) {
-      uiSplashLogString(LEVEL_WARN, "Failed to get IP address from IPCONFIG.DAT\n");
     }
     return -ENOENT;
   }
@@ -334,7 +329,6 @@ char *initMinistackArguments(uint32_t *argLength) {
   char *argStr = calloc(sizeof(char), 19);
   if (!argStr) return NULL;
   snprintf(argStr, sizeof(ipArg), "ip=%s", LAUNCHER_OPTIONS.udpfsIp);
-  DPRINTF("with argument: %s\n", argStr);
   return argStr;
 }
 
@@ -352,7 +346,6 @@ char *initPS2HDDArguments(uint32_t *argLength) {
 
   char *argStr = malloc(sizeof(ps2hddArguments));
   memcpy(argStr, ps2hddArguments, sizeof(ps2hddArguments));
-  DPRINTF("with argument: %s\n", argStr);
   return argStr;
 }
 
@@ -370,6 +363,5 @@ char *initPS2FSArguments(uint32_t *argLength) {
 
   char *argStr = malloc(sizeof(ps2fsArguments));
   memcpy(argStr, ps2fsArguments, sizeof(ps2fsArguments));
-  DPRINTF("with argument: %s\n", argStr);
   return argStr;
 }

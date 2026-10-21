@@ -1,6 +1,5 @@
 #include "ui/view_state.h"
 #include "devices/devices.h"
-#include "dprintf.h"
 #include "options.h"
 #include <errno.h>
 #include <ps2sdkapi.h>
@@ -17,10 +16,6 @@ static const char enabledViewsPath[] = "/enabledViews.txt";
 static const char enabledViewsTempPath[] = "/enabledViews.txt.tmp";
 static const char classicLayoutPath[] = "/classicLayout.txt";
 static const char classicLayoutTempPath[] = "/classicLayout.txt.tmp";
-static const char scrollBackgroundPath[] = "/scrollBackground.txt";
-static const char scrollBackgroundTempPath[] = "/scrollBackground.txt.tmp";
-static const char *const scrollBackgroundNames[SCROLL_BACKGROUND_COUNT] = {
-    "system", "game-art"};
 static const char backgroundPath[] = "/background.txt";
 static const char backgroundTempPath[] = "/background.txt.tmp";
 static const char orbsThemePath[] = "/orbsTheme.txt";
@@ -92,12 +87,10 @@ UILibraryView loadLastLibraryView(Target *target) {
   // removing the previous file and committing the replacement.
   if (!buildConfigFilePath(path, sizeof(path), device->mountpoint, lastViewTempPath) &&
       !readViewFile(path, &view)) {
-    DPRINTF("Restored library view %s from %s\n", viewNames[view], path);
     return view;
   }
   if (!buildConfigFilePath(path, sizeof(path), device->mountpoint, lastViewPath) &&
       !readViewFile(path, &view)) {
-    DPRINTF("Restored library view %s from %s\n", viewNames[view], path);
     return view;
   }
   return UI_VIEW_CLASSIC;
@@ -120,7 +113,6 @@ int saveLastLibraryView(Target *target, UILibraryView view) {
       buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, lastViewTempPath))
     return -ENAMETOOLONG;
   if (stat(directory, &st) == -1 && mkdir(directory, 0777)) {
-    DPRINTF("ERROR: Failed to create view state directory: %d\n", errno);
     return -EIO;
   }
   file = fopen(tempPath, "w");
@@ -133,10 +125,8 @@ int saveLastLibraryView(Target *target, UILibraryView view) {
     return -EIO;
   }
   if (commitConfigFile(tempPath, path)) {
-    DPRINTF("ERROR: Failed to commit last view\n");
     return -EIO;
   }
-  DPRINTF("Saved library view %s to %s\n", viewNames[view], path);
   return 0;
 }
 
@@ -232,27 +222,21 @@ int saveClassicArtOverlap(Target *target, int overlap) {
       buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, classicLayoutTempPath))
     return -ENAMETOOLONG;
   if (stat(directory, &st) == -1 && mkdir(directory, 0777)) {
-    DPRINTF("ERROR: Failed to create Classic layout directory: %d\n", errno);
     return -EIO;
   }
   file = fopen(tempPath, "w");
   if (file == NULL) {
-    DPRINTF("ERROR: Failed to open Classic layout temp file: %d\n", errno);
     return -EIO;
   }
   int writeResult = fprintf(file, "%s\n", overlap ? "overlap" : "separate");
   int closeResult = fclose(file);
   if (writeResult < 0 || closeResult) {
-    DPRINTF("ERROR: Failed to write Classic layout temp file: %d\n", errno);
     remove(tempPath);
     return -EIO;
   }
   if (commitConfigFile(tempPath, path)) {
-    DPRINTF("ERROR: Failed to commit Classic layout\n");
     return -EIO;
   }
-  DPRINTF("Saved Classic artwork layout %s to %s\n",
-          overlap ? "overlap" : "separate", path);
   return 0;
 }
 
@@ -628,63 +612,6 @@ int saveEnabledLibraryViews(Target *target, uint32_t enabledViews) {
   return 0;
 }
 
-ScrollBackground loadScrollBackground(Target *target) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  const char *paths[] = {scrollBackgroundTempPath, scrollBackgroundPath};
-  char path[PATH_MAX];
-  char value[24];
-
-  if (device == NULL || device->mountpoint == NULL)
-    return SCROLL_BACKGROUND_SYSTEM;
-  for (int i = 0; i < 2; i++) {
-    if (buildConfigFilePath(path, sizeof(path), device->mountpoint, paths[i]))
-      continue;
-    FILE *file = fopen(path, "r");
-    if (file == NULL)
-      continue;
-    int readable = fgets(value, sizeof(value), file) != NULL;
-    fclose(file);
-    if (!readable)
-      continue;
-    value[strcspn(value, "\r\n")] = '\0';
-    for (int preset = 0; preset < SCROLL_BACKGROUND_COUNT; preset++)
-      if (!strcmp(value, scrollBackgroundNames[preset]))
-        return (ScrollBackground)preset;
-  }
-  return SCROLL_BACKGROUND_SYSTEM;
-}
-
-int saveScrollBackground(Target *target, ScrollBackground preset) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  char directory[PATH_MAX];
-  char path[PATH_MAX];
-  char tempPath[PATH_MAX];
-  struct stat st;
-  FILE *file;
-
-  if (device == NULL || device->mountpoint == NULL ||
-      preset < SCROLL_BACKGROUND_SYSTEM || preset >= SCROLL_BACKGROUND_COUNT)
-    return -EINVAL;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, scrollBackgroundPath) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, scrollBackgroundTempPath))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777))
-    return -EIO;
-  file = fopen(tempPath, "w");
-  if (file == NULL)
-    return -EIO;
-  int writeResult = fprintf(file, "%s\n", scrollBackgroundNames[preset]);
-  int closeResult = fclose(file);
-  if (writeResult < 0 || closeResult) {
-    remove(tempPath);
-    return -EIO;
-  }
-  if (commitConfigFile(tempPath, path))
-    return -EIO;
-  return 0;
-}
-
 GlassColorPreset loadGlassColorPreset(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
   const char *paths[] = {glassColorTempPath, glassColorPath};
@@ -763,7 +690,6 @@ UIFont loadUIFont(Target *target) {
     value[strcspn(value, "\r\n")] = '\0';
     for (int selection = 0; selection < UI_FONT_COUNT; selection++)
       if (!strcmp(value, uiFontNames[selection])) {
-        DPRINTF("Loaded UI font %s from %s\n", value, path);
         return (UIFont)selection;
       }
   }
@@ -798,7 +724,6 @@ int saveUIFont(Target *target, UIFont selection) {
   }
   if (commitConfigFile(tempPath, path))
     return -EIO;
-  DPRINTF("Saved UI font %s to %s\n", uiFontNames[selection], path);
   return 0;
 }
 
@@ -818,7 +743,6 @@ Ps1CaseStyle loadPs1CaseStyle(Target *target) {
     if (!readable) continue;
     value[strcspn(value, "\r\n")] = '\0';
     if (!strcmp(value, "tall") || !strcmp(value, "square")) {
-      DPRINTF("Loaded PS1 case style %s from %s\n", value, path);
       return !strcmp(value, "square") ? PS1_CASE_SQUARE : PS1_CASE_TALL;
     }
   }
@@ -847,7 +771,6 @@ int savePs1CaseStyle(Target *target, Ps1CaseStyle style) {
     return -EIO;
   }
   if (commitConfigFile(tempPath, path)) return -EIO;
-  DPRINTF("Saved PS1 case style %s to %s\n", style == PS1_CASE_SQUARE ? "square" : "tall", path);
   return 0;
 }
 

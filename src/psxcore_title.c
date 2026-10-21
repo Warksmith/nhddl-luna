@@ -4,7 +4,6 @@
 #include "luna_psxcore_discset.h"
 #include "luna_psxcore_vmc.h"
 #include "devices/devices.h"
-#include "dprintf.h"
 #include "options.h"
 #include "storage.h"
 #include "psxcore_hash.h"
@@ -155,10 +154,6 @@ int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
     }
     reason=lunaPsxPrepare(bootstrap,count,args);
     if(reason){snprintf(error,size,"Cannot prepare PSXCore: %s",reason);return -1;}
-    if(updateLastLaunchedTitle(target->device,target->fullPath))DPRINTF("WARN: Could not record selected PS1 game\n");
-    DPRINTF("LUNA PS1 selected=%s cards=sony-shared card0=%s card1=%s\n",path,cards[0],cards[1]);
+    (void)updateLastLaunchedTitle(target->device,target->fullPath);
     return 0;
-}
-int lunaPsxPrepareTitle(Target *target,int createCards,char *error,size_t size,int (*progress)(uint64_t,uint64_t)) {
-    return lunaPsxPrepareTitleCards(target,NULL,createCards,-1,-1,error,size,progress);
 }

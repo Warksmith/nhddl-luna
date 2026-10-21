@@ -1,6 +1,5 @@
 #include "devices/devices.h"
 #include "common.h"
-#include "dprintf.h"
 #include "ui/ui.h"
 #include <errno.h>
 #include <kernel.h>
@@ -80,9 +79,7 @@ int initDeviceMap() {
       continue;
     }
 
-    uiSplashLogString(LEVEL_INFO_NODELAY, "Initializing %s backend\n", backends[i].name);
     if ((res = backends[i].initFunction(deviceCount)) < 0) {
-      DPRINTF("ERROR: Failed to initialize %s backend: %d\n", backends[i].name, res);
       if (res != -ENODEV)
         discoveryFailures |= backends[i].targetModes & LAUNCHER_OPTIONS.mode;
       // A backend can fail after registering several devices. Release all

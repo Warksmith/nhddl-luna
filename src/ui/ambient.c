@@ -1,6 +1,5 @@
 #include "ui/ambient.h"
 #include "common.h"
-#include "dprintf.h"
 #include <kernel.h>
 #include <loadfile.h>
 #include <ps2snd.h>
@@ -131,11 +130,9 @@ void ambientStart(int shouldPlay) {
 #endif
   FILE *file = fopen(path, "rb");
   if (file == NULL) {
-    DPRINTF("WARN: Ambient audio file is missing\n");
     return;
   }
   if (inspectAudio(file)) {
-    DPRINTF("WARN: Ambient audio file has an unsupported format\n");
     fclose(file);
     return;
   }
@@ -168,11 +165,8 @@ void ambientStart(int shouldPlay) {
   if (uploadChannel(file, 0) || uploadChannel(file, 1)) goto fail;
   fclose(file);
   startVoices();
-  DPRINTF("Ambient native ADPCM: %u frames at 48000 Hz, %u bytes in SPU2; hardware loop\n",
-          sampleFrames, channelBytes * 2);
   return;
 fail:
-  DPRINTF("WARN: Could not start native ambient audio\n");
   fclose(file);
   ambientStop();
 }

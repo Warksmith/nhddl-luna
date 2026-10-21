@@ -269,11 +269,9 @@ static void drawBrowserRow(int y, int selected, const char *name,
 static void drawBrowserFrameSelected(const char *heading, const char *path,
                              const char *status, PromptBar footer,
                              int count, int selected, int first,
-                             int previewColumn,
                              int (*row)(int, char *, size_t, char *, size_t,
-                                        CardArtType *,
                                         void *), void *context,
-                                     BrowserSelector *selector) {
+                             BrowserSelector *selector) {
   int left = keepoutArea + 30;
   int right = gsGlobal->Width - left;
   int lineHeight = getFontLineHeight();
@@ -281,11 +279,9 @@ static void drawBrowserFrameSelected(const char *heading, const char *path,
   int listTop = 112;
   int listBottom = gsGlobal->Height - footerHeight - lineHeight;
   int visible = (listBottom - listTop) / rowStep;
-  int rowRight = previewColumn ? right - previewColumn : right;
   int selectorY = selector != NULL
       ? browserSelectorY(selector, selected, first,
                            listTop + (selected - first) * rowStep) : -1;
-  CardArtType selectedArt = CARD_ART_NONE;
   gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
   drawBrowserSheet(0);
   drawTextWindow(left, headerHeight - lineHeight, right, headerHeight + 2,
@@ -295,20 +291,13 @@ static void drawBrowserFrameSelected(const char *heading, const char *path,
   for (int index = first; index < count && index < first + visible; index++) {
     char name[PATH_MAX + 3];
     char detail[32];
-    CardArtType cardArt = CARD_ART_NONE;
-    if (!row(index, name, sizeof(name), detail, sizeof(detail),
-             &cardArt, context))
+    if (!row(index, name, sizeof(name), detail, sizeof(detail), context))
       continue;
-    if (index == selected)
-      selectedArt = cardArt;
     drawBrowserRow(listTop + (index - first) * rowStep,
                    index == selected, name, detail[0] ? detail : NULL,
-                   rowRight, selectorY,
+                   right, selectorY,
                    selector != NULL && !selector->wordOnly ? right : 0);
   }
-  if (previewColumn && selectedArt != CARD_ART_NONE)
-    drawCardArt(selectedArt, right - previewColumn + 10, listTop + 8,
-                previewColumn - 20);
   if (count == 0)
     drawTextWindow(left + 18, listTop, right, listTop + lineHeight,
                    0, HeaderTextColor, ALIGN_LEFT, lunaText("Nothing to show"));
@@ -322,11 +311,10 @@ static void drawBrowserFrameSelected(const char *heading, const char *path,
 static void drawBrowserFrame(const char *heading, const char *path,
                              const char *status, PromptBar footer,
                              int count, int selected, int first,
-                             int previewColumn,
                              int (*row)(int, char *, size_t, char *, size_t,
-                                        CardArtType *, void *), void *context) {
+                                        void *), void *context) {
   drawBrowserFrameSelected(heading, path, status, footer, count, selected, first,
-                           previewColumn, row, context, NULL);
+                           row, context, NULL);
 }
 
 static int browserVisibleRows(void) {
@@ -342,21 +330,15 @@ static int browserFirstRow(int selected) {
 }
 
 static int rootRow(int index, char *name, size_t nameSize,
-                   char *detail, size_t detailSize, CardArtType *cardArt,
-                   void *context) {
+                   char *detail, size_t detailSize, void *context) {
   BrowserRoot *roots = context;
   snprintf(name, nameSize, "%s", roots[index].label);
   snprintf(detail, detailSize, "%s", roots[index].path);
-  if (!strcmp(roots[index].path, "mc0:/"))
-    *cardArt = CARD_ART_SLOT_1;
-  else if (!strcmp(roots[index].path, "mc1:/"))
-    *cardArt = CARD_ART_SLOT_2;
   return 1;
 }
 
 static int fileRow(int index, char *name, size_t nameSize,
-                   char *detail, size_t detailSize, CardArtType *cardArt,
-                   void *context) {
+                   char *detail, size_t detailSize, void *context) {
   BrowserEntry *entries = context;
   BrowserEntry *entry = &entries[index];
   snprintf(name, nameSize, "%s%s", entry->name,
@@ -368,7 +350,6 @@ static int fileRow(int index, char *name, size_t nameSize,
              (unsigned long long)((entry->size + 1023) / 1024));
   else
     detail[0] = '\0';
-  *cardArt = CARD_ART_NONE;
   return 1;
 }
 
@@ -522,7 +503,7 @@ static void drawFileManagerSelection(int x1, int y, int x2,
 
 static void drawFileManagerList(const char *title, const char *subtitle,
     const char *notice, int count, int selected,
-    int (*row)(int, char *, size_t, char *, size_t, CardArtType *, void *),
+    int (*row)(int, char *, size_t, char *, size_t, void *),
     void *context, PromptBar help) {
   int left = keepoutArea + 32, right = gsGlobal->Width - left;
   int top = 62, bottom = gsGlobal->Height - 28;
@@ -541,8 +522,7 @@ static void drawFileManagerList(const char *title, const char *subtitle,
   int first = selected / visible * visible;
   for (int i = first; i < count && i < first + visible; i++) {
     char name[PATH_MAX + 16], detail[PATH_MAX + 16];
-    CardArtType art;
-    if (!row(i, name, sizeof(name), detail, sizeof(detail), &art, context)) continue;
+    if (!row(i, name, sizeof(name), detail, sizeof(detail), context)) continue;
     int rowY = y + (i - first) * step;
     if (i == selected) drawFileManagerSelection(left + 10, rowY, right - 10, line, 1);
     fileManagerFitText(name, right - left - 36, fitted, sizeof(fitted), 0);
@@ -1145,15 +1125,6 @@ static void fileManagerFitText(const char *text, int width,
   else { memcpy(out, text, best); memcpy(out + best, "...", 4); }
 }
 
-static void fileManagerDeviceName(const BrowserRoot *roots, int rootCount,
-                                   const BrowserPane *pane, char *out, size_t capacity) {
-  if (pane->root < 0 || pane->root >= rootCount) {
-    snprintf(out, capacity, "%s", lunaText("Choose drive"));
-    return;
-  }
-  snprintf(out, capacity, "%s (%s)", roots[pane->root].label, roots[pane->root].path);
-}
-
 static void drawFileManagerMark(int x, int y, int marked) {
   int size = 12;
   uint64_t edge = glassPresetColor(0x78, 0xBD, 0xD7, marked ? 0x78 : 0x38);
@@ -1749,25 +1720,23 @@ static int findKeepBothPath(const char *folder, const char *name,
 
 static int conflictRow(int index, char *name, size_t nameSize,
                         char *detail, size_t detailSize,
-                        CardArtType *cardArt, void *context) {
+                        void *context) {
   (void)context;
   snprintf(name, nameSize, "%s", index == 0 ? lunaText("Skip") :
            index == 1 ? lunaText("Keep Both") : lunaText("Replace"));
   detail[0] = '\0';
-  *cardArt = CARD_ART_NONE;
   (void)detailSize;
   return 1;
 }
 
 static int replaceConfirmRow(int index, char *name, size_t nameSize,
                               char *detail, size_t detailSize,
-                              CardArtType *cardArt, void *context) {
+                              void *context) {
   (void)index;
   (void)context;
   (void)detailSize;
   snprintf(name, nameSize, lunaText("Replace existing item"));
   detail[0] = '\0';
-  *cardArt = CARD_ART_NONE;
   return 1;
 }
 
@@ -2026,15 +1995,13 @@ static void runCopyQueue(const BrowserRoot *roots, int rootCount,
 }
 
 static int queueRow(int index, char *name, size_t nameSize,
-                    char *detail, size_t detailSize, CardArtType *cardArt,
-                    void *context) {
+                    char *detail, size_t detailSize, void *context) {
   const CopyQueue *queue = context;
   const char *path = queue->items[index].path;
   const char *base = strrchr(path, '/');
   snprintf(name, nameSize, "%s%s", base ? base + 1 : path,
            queue->items[index].isDirectory ? "/" : "");
   snprintf(detail, detailSize, "%s", path);
-  *cardArt = CARD_ART_NONE;
   return 1;
 }
 
@@ -2201,7 +2168,7 @@ static int drawFileOpenProgress(size_t completed, size_t total, void *context) {
         total ? (unsigned)((uint64_t)completed * 100 / total) : 0);
   else snprintf(status, sizeof(status), "%s", lunaText("Reading text file..."));
   drawBrowserFrame(lunaText("File Explorer"), progress->path, status,
-      PROMPT_ONE(ICON_CIRCLE, lunaText("Cancel")), 0, 0, 0, 0, NULL, NULL);
+      PROMPT_ONE(ICON_CIRCLE, lunaText("Cancel")), 0, 0, 0, NULL, NULL);
   return 0;
 }
 
@@ -2468,16 +2435,13 @@ static int vmcCardName(const char *name) {
 }
 
 static int vmcRow(int index, char *name, size_t nameSize,
-                  char *detail, size_t detailSize, CardArtType *cardArt,
-                  void *context) {
+                  char *detail, size_t detailSize, void *context) {
   if (index == 0) {
     snprintf(name, nameSize, lunaText("Create new card"));
     snprintf(detail, detailSize, "8 MB");
-    *cardArt = CARD_ART_VIRTUAL;
     return 1;
   }
-  return fileRow(index - 1, name, nameSize, detail, detailSize, cardArt,
-                 context);
+  return fileRow(index - 1, name, nameSize, detail, detailSize, context);
 }
 
 static int loadVMCCards(const char *path, BrowserEntry *entries, int *count) {
@@ -2519,8 +2483,8 @@ static void drawVMCProgress(int percent, void *context) {
   char status[80];
   snprintf(status, sizeof(status), lunaText("Creating formatted card: %d%%"), percent);
   drawBrowserFrame(lunaText("Virtual Memory Cards"), state->directory, status,
-                   PROMPT_TEXT(lunaText("Please wait until creation finishes")), 0, 0, 0, 0,
-                   vmcRow, NULL);
+                   PROMPT_TEXT(lunaText("Please wait until creation finishes")),
+                   0, 0, 0, vmcRow, NULL);
 }
 
 static int createNextVMC(const char *directory, char *created,
@@ -2576,13 +2540,13 @@ static void uiVMCManagerLoop(void) {
                        rootCount ? status :
                                                     lunaText("No supported local drives found."),
                        PROMPT_TWO(ICON_CROSS, lunaText("Open"), ICON_TRIANGLE, lunaText("Back")),
-                       rootCount, rootSelected, browserFirstRow(rootSelected), 0,
+                       rootCount, rootSelected, browserFirstRow(rootSelected),
                        rootRow, roots, &driveSelector);
     else
       drawBrowserFrameSelected(lunaText("Virtual Memory Cards"), directory, status,
                        PROMPT_TWO(ICON_CROSS, lunaText("Create/View"),
                                   ICON_TRIANGLE, lunaText("Back")),
-                       count + 1, selected, browserFirstRow(selected), 128,
+                       count + 1, selected, browserFirstRow(selected),
                        vmcRow, entries, &cardSelector);
     int input = readInput();
     if (input & (PAD_TRIANGLE | PAD_CIRCLE)) {
@@ -2640,10 +2604,8 @@ static void uiVMCManagerLoop(void) {
 #endif
 
 static int storageRow(int index, char *name, size_t nameSize,
-                      char *detail, size_t detailSize, CardArtType *art,
-                      void *context) {
+                      char *detail, size_t detailSize, void *context) {
   StorageSettings *settings = context;
-  *art = CARD_ART_NONE;
   if (index < STORAGE_SOURCE_COUNT) {
     ModeType mode = storageSourceMode(index);
     snprintf(name, nameSize, "%s", storageSourceName(index));
@@ -2672,7 +2634,7 @@ static int uiStorageLoop(void) {
                                    {ICON_CIRCLE, lunaText("Back")}};
     drawBrowserFrameSelected(lunaText("Storage Devices"), lunaText("Connected devices only"), status,
                      (PromptBar){NULL, prompts, 3}, 10, selected,
-                     browserFirstRow(selected), 0, storageRow, &settings, &selector);
+                     browserFirstRow(selected), storageRow, &settings, &selector);
     int input = readInput();
     if (input & PAD_CIRCLE) return 0; // Discard pending edits.
     if (input & PAD_UP) selected = (selected + 9) % 10;
@@ -2708,7 +2670,7 @@ static int uiStorageLoop(void) {
         drawBrowserFrameSelected(lunaText("Restart storage drivers"), lunaText("Apply changes"),
                          lunaText("LUNA will reopen the library after restarting its drivers."),
                          PROMPT_TWO(ICON_CROSS, lunaText("Apply"), ICON_CIRCLE, lunaText("Cancel")),
-                         10, selected, browserFirstRow(selected), 0, storageRow, &settings, &selector);
+                         10, selected, browserFirstRow(selected), storageRow, &settings, &selector);
         if (!(waitForInput(PAD_CROSS | PAD_CIRCLE) & PAD_CROSS)) continue;
       }
       if (storageSave(&settings)) {
@@ -2733,11 +2695,9 @@ static int uiStorageLoop(void) {
 }
 
 static int languageRow(int index, char *name, size_t nameSize,
-                       char *detail, size_t detailSize, CardArtType *cardArt,
-                       void *context) {
+                       char *detail, size_t detailSize, void *context) {
   snprintf(name, nameSize, "%s", lunaLanguageName((LunaLanguage)index));
   snprintf(detail, detailSize, "%s", index == (int)lunaLanguage() ? lunaText("Selected") : "");
-  *cardArt = CARD_ART_NONE;
   (void)context;
   return 1;
 }
@@ -2749,7 +2709,7 @@ static void uiLanguageLoop(void) {
   while (1) {
     drawBrowserFrameSelected("LUNA", lunaText("Language"), status,
         PROMPT_TWO(ICON_CROSS, lunaText("Select"), ICON_CIRCLE, lunaText("Cancel")),
-        LUNA_LANGUAGE_COUNT, selected, 0, 0, languageRow, NULL, &selector);
+        LUNA_LANGUAGE_COUNT, selected, 0, languageRow, NULL, &selector);
     int input = readInput();
     if (input & (PAD_CIRCLE | PAD_TRIANGLE)) return;
     if (input & PAD_UP)
@@ -2764,8 +2724,7 @@ static void uiLanguageLoop(void) {
 }
 
 static int mainMenuRow(int index, char *name, size_t nameSize,
-                       char *detail, size_t detailSize, CardArtType *cardArt,
-                       void *context) {
+                       char *detail, size_t detailSize, void *context) {
   int hasLibrary = ((MainMenuContext *)context)->hasLibrary;
   const char *label = index == 0 ? lunaText("File Explorer") :
                       index == 1 ? lunaText("Virtual Memory Cards") :
@@ -2775,7 +2734,6 @@ static int mainMenuRow(int index, char *name, size_t nameSize,
                        index == (hasLibrary ? 6 : 5) ? lunaText("Shutdown") : lunaText("Exit LUNA"));
   snprintf(name, nameSize, "%s", label);
   detail[0] = '\0';
-  *cardArt = CARD_ART_NONE;
   (void)detailSize;
   return 1;
 }
@@ -2789,9 +2747,8 @@ static void drawMainMenuFrame(const char *subtitle, int count, int selected,
   int panelWidth = 320;
   char labels[7][128];
   for (int index = 0; index < count; ++index) {
-    char detail[1]; CardArtType art;
-    mainMenuRow(index, labels[index], sizeof(labels[index]), detail, sizeof(detail),
-                &art, menu);
+    char detail[1];
+    mainMenuRow(index, labels[index], sizeof(labels[index]), detail, sizeof(detail), menu);
     int width = (int)getLineWidth(labels[index]) + 64;
     if (width > panelWidth) panelWidth = width;
   }

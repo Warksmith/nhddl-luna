@@ -9,10 +9,8 @@ int uiMainMenuLoop(int hasLibrary);
 const char *uiPs1VmcLoad(Target *target, LunaPsxVmcSettings *settings);
 int uiPs1VmcRetry(Target *target, const char *error);
 int uiPs1VmcPolicy(Target *target, LunaPsxVmcSettings *settings);
-const char *uiPs1VmcPrepare(Target *target, LunaPsxVmcSettings *settings);
-// Picker/creation return 1 after changing the pending per-game assignment.
+// Returns 1 after changing the pending per-game assignment.
 int uiPs1VmcPicker(Target *target, LunaPsxVmcSettings *settings);
-int uiPs1VmcCreate(Target *target, LunaPsxVmcSettings *settings);
 void uiPs1VmcManage(const LunaPsxVmcSettings *settings, int slot);
 void uiPs1VmcDescribe(const LunaPsxVmcSettings *settings, char name[64], char slots[2][32]);
 // Returns STORAGE_UI_REFRESH only after saving a playlist and requesting a scan.

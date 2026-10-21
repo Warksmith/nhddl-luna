@@ -30,14 +30,8 @@ extern GSTEXTURE *gridSelector;
 // Loads a PNG file through LUNA's RGBA-normalizing decoder.
 int loadPNGTextureRGBA(GSGLOBAL *gsGlobal, GSTEXTURE *texture, const char *path);
 
-// Loads an embedded PNG and uploads it to GS VRAM.
-int loadPNGTextureRGBAMemory(GSGLOBAL *gsGlobal, GSTEXTURE *texture,
-                             const unsigned char *data, size_t size);
-
 // Decodes a PNG into EE memory without uploading it to GS VRAM.
 int decodePNGTextureRGBA(GSGLOBAL *gsGlobal, GSTEXTURE *texture, const char *path);
-int decodePNGTextureRGBATimed(GSGLOBAL *gsGlobal, GSTEXTURE *texture, const char *path,
-                              uint32_t *readMs, uint32_t *decodeMs);
 
 #define ALIGN_LEFT 0 << 0
 #define ALIGN_RIGHT 1 << 0
@@ -78,16 +72,6 @@ typedef struct {
 } PromptBar;
 
 typedef enum {
-  CARD_ART_NONE = -1,
-  CARD_ART_VIRTUAL,
-  CARD_ART_SLOT_1,
-  CARD_ART_SLOT_2,
-  CARD_ART_MEMORY_CARD_MENU,
-  CARD_ART_FILE_EXPLORER,
-  CARD_ART_COUNT,
-} CardArtType;
-
-typedef enum {
   UI_FONT_DEJAVU,
   UI_FONT_PSBBN,
   UI_FONT_COUNT,
@@ -101,7 +85,6 @@ int reserveUIFontVRAM(void);
 
 // Switches the UI bitmap font; leaves the current font selected on failure.
 int setUIFont(UIFont selection);
-UIFont getUIFont(void);
 
 // Draws the text with specified max dimensions relative to x and y
 // Returns the bottom Y coordinate of the last line that can be used to draw the next text
@@ -145,9 +128,6 @@ void drawPromptBar(int left, int top, int right, int bottom, int z,
 
 // Quiet selection plate with the Options menu's leading accent.
 void drawMenuRowSelector(int left, int top, int right);
-
-// Draws bundled memory-card artwork at the requested square size.
-void drawCardArt(CardArtType card, float x, float y, float size);
 
 // Draws the embedded Classic scrollbar PNG at a chosen height.
 

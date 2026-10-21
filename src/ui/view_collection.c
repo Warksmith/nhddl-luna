@@ -31,10 +31,8 @@ void drawPSBBNCover(GSTEXTURE *cover, float x1, float y1, float size, int cacheI
     int previousAlphaTest = gsGlobal->Test->ATST;
     int previousAlphaReference = gsGlobal->Test->AREF;
     int previousAlphaFail = gsGlobal->Test->AFAIL;
-    uint32_t bindStartMs = uiNowMs();
     if (!bindTextureSafe(gsGlobal, cover))
       return;
-    recordCollectionCoverBind(uiNowMs() - bindStartMs);
     gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
     gsGlobal->Test->ATST = 2;
     gsGlobal->Test->AREF = 0x80;

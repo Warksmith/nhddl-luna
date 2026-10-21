@@ -3,12 +3,11 @@
 #include <fcntl.h>
 #include <stdio.h>
 
-// Logs to debug screen and debug console
+// Displays a fatal startup error on the PS2 text screen
 void logString(const char *str, ...) {
   va_list args;
   va_start(args, str);
 
-  vprintf(str, args);
   scr_vprintf(str, args);
 
   va_end(args);

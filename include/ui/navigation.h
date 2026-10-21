@@ -109,12 +109,6 @@ uint32_t lunaNavDurationFrames(uint32_t durationMs, int framesPerSecond);
 int lunaNavClassicGlideFrameOffset(int startOffset, uint32_t elapsedFrames,
                                    uint32_t durationFrames);
 int lunaNavRandomTarget(int total, int selectedIndex, uint32_t randomSeed);
-int lunaNavMarkedCount(const uint8_t *marked, int total);
-int lunaNavMarkedRank(const uint8_t *marked, int total, int index);
-int lunaNavMarkedByRank(const uint8_t *marked, int total, int rank);
-int lunaNavMarkedStep(const uint8_t *marked, int total, int index, int direction);
-int lunaNavMarkedPage(const uint8_t *marked, int total, int index, int pageSize,
-                      int direction);
 UILibraryView lunaNavNextView(UILibraryView view, uint32_t enabledViews);
 const char *lunaNavViewLabel(UILibraryView view);
 

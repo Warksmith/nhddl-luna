@@ -8,13 +8,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Executable name
 set(EE_BIN "luna_unc.elf")
 set(EE_BIN_PKD "luna.elf")
-# Enable debug output if requested
-option(ENABLE_PRINTF "Enable printf debugging output" ON)
+# Diagnostics are restored only through the ignored local development patch.
+if(ENABLE_PRINTF)
+  message(FATAL_ERROR "Diagnostics are local-only. Configure production with ENABLE_PRINTF=OFF.")
+endif()
 option(LUNA_EMULATOR_BUILD "Enable behavior used only by emulator test builds" OFF)
 option(LUNA_ENABLE_PSXCORE "Build with the experimental PSXCore dependency" OFF)
-option(LUNA_PSXCORE_DEVELOPMENT "Enable local PSXCore development launch entry" OFF)
-if(LUNA_PSXCORE_DEVELOPMENT AND NOT LUNA_ENABLE_PSXCORE)
-  message(FATAL_ERROR "LUNA_PSXCORE_DEVELOPMENT requires LUNA_ENABLE_PSXCORE")
+if(LUNA_PSXCORE_DEVELOPMENT)
+  message(FATAL_ERROR "The development launch harness is local-only and is not part of production.")
 endif()
 set(LUNA_PSXCORE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../psxcore" CACHE PATH
     "Path to the PSXCore source checkout")
@@ -90,20 +91,6 @@ set(SOURCES
     src/devices/title_id.c
 )
 
-# Bundle menu artwork so it is available on both HostFS and real hardware.
-foreach(CARD_ICON virtual_memory_card ps1_memory_card_1 ps1_memory_card_2 memory_card_menu file_explorer)
-  add_custom_command(
-      OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${CARD_ICON}_png.c"
-      COMMAND ${PS2SDK}/bin/bin2c
-              "${CMAKE_CURRENT_SOURCE_DIR}/res/gfx/card-icons/${CARD_ICON}.png"
-              "${CMAKE_CURRENT_BINARY_DIR}/${CARD_ICON}_png.c"
-              "${CARD_ICON}_png"
-      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/res/gfx/card-icons/${CARD_ICON}.png"
-      COMMENT "Embedding ${CARD_ICON}.png"
-  )
-  list(APPEND SOURCES "${CMAKE_CURRENT_BINARY_DIR}/${CARD_ICON}_png.c")
-endforeach()
-
 include(irx.cmake)
 
 # Get git version for build info
@@ -125,10 +112,6 @@ endif()
 # Set compiler flags
 add_definitions(-DGIT_VERSION=\"${GIT_VERSION}\")
 
-if(ENABLE_PRINTF)
-  add_definitions(-DENABLE_PRINTF)
-endif()
-
 if(LUNA_EMULATOR_BUILD)
   add_definitions(-DLUNA_EMULATOR_BUILD)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/assets/ambient.adp
@@ -144,9 +127,6 @@ if(LUNA_ENABLE_PSXCORE)
   target_link_libraries(${EE_BIN} PSXCore::core)
   target_compile_definitions(${EE_BIN} PRIVATE LUNA_ENABLE_PSXCORE=1)
   target_link_options(${EE_BIN} PRIVATE -Wl,--defsym=luna_psxcore_heap_limit=1)
-  if(LUNA_PSXCORE_DEVELOPMENT)
-    target_compile_definitions(${EE_BIN} PRIVATE LUNA_PSXCORE_DEVELOPMENT=1)
-  endif()
 endif()
 
 # Include directories
@@ -172,7 +152,7 @@ target_link_libraries(${EE_BIN}
     poweroff
     patches
     fileXio
-    libdebug.a
+    libdebug.a # Fatal startup error display; required on retail hardware.
     gskit_toolkit
     gskit
     dmakit

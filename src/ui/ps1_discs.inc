@@ -8,8 +8,8 @@ static int ps1DiscConfirm(const char *title,const char *detail) {
 }
 
 static int ps1DiscRow(int index,char *name,size_t nameSize,char *detail,size_t detailSize,
-    CardArtType *art,void *context) {
-  TargetDiscSet *set=context;*art=CARD_ART_NONE;
+    void *context) {
+  TargetDiscSet *set=context;
   if((unsigned)index<set->count) {
     const char *slash=strrchr(set->paths[index],'/');
     snprintf(name,nameSize,"%s",slash?slash+1:set->paths[index]);
@@ -32,7 +32,7 @@ int uiPs1DiscManage(Target *target) {
   for(;;) {
     drawBrowserFrameSelected(lunaText("Manage discs"),target->name,lunaText(status),
       PROMPT_TWO(ICON_CROSS,lunaText("Select"),ICON_TRIANGLE,lunaText("Back")),
-      (int)set->count+2,selected,browserFirstRow(selected),0,ps1DiscRow,set,&selector);
+      (int)set->count+2,selected,browserFirstRow(selected),ps1DiscRow,set,&selector);
     int input=readInput();
     if(input&(PAD_CIRCLE|PAD_TRIANGLE))break;
     if(input&PAD_UP)selected=(selected+(int)set->count+1)%((int)set->count+2);

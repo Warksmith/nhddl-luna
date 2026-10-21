@@ -3,7 +3,6 @@
 #include "devices/devices.h"
 #include "devices/init.h"
 #include "devices/title_id.h"
-#include "dprintf.h"
 #include "forwarder.h"
 #include "neutrino.h"
 #include "options.h"
@@ -64,10 +63,6 @@ ModeType parseFilename(const char *path);
 int parseIPConfig(void);
 
 int main(int argc, char *argv[]) {
-  DPRINTF("*************\nLUNA %s\nLightweight Unified Neutrino Access\nBased on NHDDL by pcm720\n*************\n", GIT_VERSION);
-
-  for (int i = 0; i < argc; i++)
-    DPRINTF("argv[%d] = %s\n", i, argv[i]);
 
   // Parse arguments
   if ((argc > 0 && argv[0][0] == '-') || (argc > 1 && argv[1][0] == '-'))
@@ -81,7 +76,6 @@ int main(int argc, char *argv[]) {
     goto fail;
   }
 
-  DPRINTF("Initializing UI\n");
   if ((res = uiInit())) {
     init_scr();
     logString("\n\nERROR: Failed to init UI: %d\n", res);
@@ -107,19 +101,16 @@ int main(int argc, char *argv[]) {
   if (res)
     goto fail;
 
-  uiSplashLogString(LEVEL_INFO_NODELAY, lunaText("Building target list...\n"));
 
   titles = storageRefresh(NULL);
   if (titles == NULL)
     goto fail;
 
   if (titles->total == 0) {
-    uiSplashLogString(LEVEL_INFO_NODELAY, lunaText("No targets found; file manager available\n"));
   }
 
   // Let the audio worker preempt long cover decodes in the UI thread.
-  if (ChangeThreadPriority(GetThreadId(), 0x20) < 0)
-    DPRINTF("WARN: Could not lower UI thread priority for ambient audio\n");
+  (void)ChangeThreadPriority(GetThreadId(), 0x20);
 
   int preparedCollectionIdx = -1;
   // Start the soundtrack as soon as the library drive is ready, while the
@@ -150,15 +141,11 @@ int main(int argc, char *argv[]) {
       // Previous-only covers can finish after Collection is revealed.
       setCollectionArtForeground(1);
       preparedCollectionIdx = audioTarget->idx;
-      uint32_t prepareStartMs = uiNowMs();
-      DPRINTF("Collection boot: preparing current + six upcoming covers\n");
       refreshCollectionCovers(titles, preparedCollectionIdx, -1);
       while (!collectionCoversReady(titles, preparedCollectionIdx)) {
         serviceCollectionEntryCovers(titles, preparedCollectionIdx);
         usleep(16000);
       }
-      DPRINTF("Collection boot: entry covers ready after %u ms\n",
-              (unsigned)(uiNowMs() - prepareStartMs));
     }
   }
 
@@ -170,12 +157,10 @@ int main(int argc, char *argv[]) {
       logString("ERROR: Could not start storage scan screen: %d\n", res);
       goto fail;
     }
-    DPRINTF("Storage refresh: discovering games\n");
     TargetList *updated = storageRefresh(titles);
     if (updated) titles = updated;
-    else uiSplashLogString(LEVEL_ERROR, lunaText("Scan could not finish. Previous library kept.\n"));
+    else uiSplashError(lunaText("Scan could not finish. Previous library kept.\n"));
     stopUISplashThread();
-    DPRINTF("Storage refresh: finished with %d games\n", titles->total);
     preparedCollectionIdx = -1;
     if (titles->total) ambientStart(loadAmbientSoundEnabled(titles->first));
   }
@@ -184,7 +169,6 @@ int main(int argc, char *argv[]) {
     logString("\n\nERROR: UI loop failed: %d\n", res);
     goto fail;
   }
-  DPRINTF("UI loop done, exiting\n");
   freeTargetList(titles);
   syncDeviceMap();
   freeDeviceMapEntries(deviceModeMap);
@@ -200,27 +184,14 @@ fail:
 int initDevices() {
   // Device backends already perform bounded readiness probes. Do not add a
   // second, unconditional one-second splash delay before those probes begin.
-  uiSplashLogString(LEVEL_INFO_NODELAY, lunaText("Waiting for storage devices...\n"));
   int res = initDeviceMap();
   if ((res < 0)) {
-    uiSplashLogString(LEVEL_ERROR, lunaText("Failed to initialize devices\n"));
+    uiSplashError(lunaText("Failed to initialize devices\n"));
     return -EIO;
   }
   if (!res) {
-    uiSplashLogString(LEVEL_INFO_NODELAY, lunaText("No storage devices found; settings available\n"));
   }
   return 0;
-}
-
-// Reads Neutrino version and displays Neutrino path and version on the splash screen
-void showNeutrinoSplash() {
-  // Get Neturino version
-  char *neutrinoVersion = getNeutrinoVersion();
-  uiSplashSetNeutrinoVersion(neutrinoVersion);
-  // Successful boot messages are hidden by LUNA's minimal splash, so waiting
-  // a full second here only makes the library appear later.
-  uiSplashLogString(LEVEL_INFO_NODELAY, "Found Neutrino at\n%s\n", NEUTRINO_ELF_PATH);
-  free(neutrinoVersion);
 }
 
 // Does a quick init for options given in argv
@@ -244,18 +215,16 @@ int argInit() {
   // Search for neutrino.elf
   getcwd(cwdPath, PATH_MAX + 1);
   if (findNeutrinoELF(cwdPath)) {
-    uiSplashLogString(LEVEL_ERROR, lunaText("Couldn't find neutrino.elf\n"));
+    uiSplashError(lunaText("Couldn't find neutrino.elf\n"));
     return -ENOENT;
   }
 
-  showNeutrinoSplash();
   storageProtectRuntime(NEUTRINO_ELF_PATH);
   return 0;
 }
 
 // Initializes modules, NHDDL configuraton, Neutrino path and device map
 int init(char *elfPath) {
-  uiSplashLogString(LEVEL_INFO_NODELAY, lunaText("Initializing...\n"));
   int initialModules = 0;
   if (elfPath) {
     // Guess root device
@@ -268,7 +237,6 @@ int init(char *elfPath) {
 
     // Try to load options
     if (loadOptions(elfPath)) {
-      DPRINTF("Failed to load options file, will use defaults\n");
       // Default to loading all devices
       LAUNCHER_OPTIONS.mode = LUNA_LIBRARY_DEFAULT_MODES | MODE_BASIC;
     }
@@ -294,11 +262,10 @@ int init(char *elfPath) {
   res = findNeutrinoELF(elfPath);
   free(elfPath);
   if (res < 0) {
-    uiSplashLogString(LEVEL_ERROR, lunaText("Couldn't find neutrino.elf\n"));
+    uiSplashError(lunaText("Couldn't find neutrino.elf\n"));
     return -ENOENT;
   }
 
-  showNeutrinoSplash();
   storageProtectRuntime(NEUTRINO_ELF_PATH);
   return 0;
 }
@@ -378,22 +345,16 @@ void parseArgv(int argc, char *argv[]) {
     arg++;
 
     if (val && !strcmp(OPTION_VMODE, arg)) {
-      DPRINTF("Using VMode %s\n", val);
       LAUNCHER_OPTIONS.vmode = parseVMode(val);
     } else if (val && !strcmp(OPTION_MODE, arg)) {
-      DPRINTF("Using mode %s\n", val);
       LAUNCHER_OPTIONS.mode |= parseMode(val);
     } else if (val && !strcmp(OPTION_UDPFS_IP, arg)) {
-      DPRINTF("Using UDPFS IP %s\n", val);
       strlcpy(LAUNCHER_OPTIONS.udpfsIp, val, sizeof(LAUNCHER_OPTIONS.udpfsIp));
     } else if (val && !strcmp(OPTION_IMAGE, arg)) {
-      DPRINTF("Using image %s\n", val);
       LAUNCHER_OPTIONS.image = strdup(val);
     } else if (val && !strcmp(OPTION_RETURN_PATH, arg)) {
-      DPRINTF("Using in-game return path %s\n", val);
       strlcpy(LAUNCHER_OPTIONS.returnPath, val, sizeof(LAUNCHER_OPTIONS.returnPath));
     } else if (!strcmp(OPTION_NO_INIT, arg)) {
-      DPRINTF("Skipping IOP init\n");
       LAUNCHER_OPTIONS.noInit = 1;
     }
   }
@@ -414,7 +375,6 @@ int loadOptions(char *cwdPath) {
       strcat(lineBuffer, legacyOptionsFile);
     }
     if (tryFile(lineBuffer)) {
-      DPRINTF("Trying device fallback path\n");
       char *mountpoint = strchr(lineBuffer, '/');
       if (mountpoint) {
         *mountpoint = '\0';
@@ -435,7 +395,6 @@ int loadOptions(char *cwdPath) {
   ArgumentList *options = calloc(1, sizeof(ArgumentList));
   if (loadArgumentList(options, NULL, lineBuffer)) {
     // Else, fail
-    DPRINTF("Can't load options file, will use defaults\n");
     freeArgumentList(options);
     return -ENOENT;
   }
@@ -445,18 +404,14 @@ int loadOptions(char *cwdPath) {
   while (arg != NULL) {
     if (!arg->isDisabled) {
       if (strcmp(OPTION_VMODE, arg->arg) == 0) {
-        printf("Using VMode %s\n", arg->value);
         LAUNCHER_OPTIONS.vmode = parseVMode(arg->value);
       } else if (strcmp(OPTION_MODE, arg->arg) == 0) {
-        printf("Using mode %s\n", arg->value);
         ModeType mode = parseMode(arg->value);
         LAUNCHER_OPTIONS.mode |= mode;
         configuredLibraryModes |= mode & LUNA_LIBRARY_OPT_IN_MODES;
       } else if (strcmp(OPTION_UDPFS_IP, arg->arg) == 0) {
-        printf("Using UDPFS IP %s\n", arg->value);
         strlcpy(LAUNCHER_OPTIONS.udpfsIp, arg->value, sizeof(LAUNCHER_OPTIONS.udpfsIp));
       } else if (strcmp(OPTION_RETURN_PATH, arg->arg) == 0) {
-        printf("Using in-game return path %s\n", arg->value);
         strlcpy(LAUNCHER_OPTIONS.returnPath, arg->value, sizeof(LAUNCHER_OPTIONS.returnPath));
       }
     }
@@ -509,7 +464,6 @@ int probePath(char *filePath, int probeAttempts) {
 char *resolveRootDevice(char *argv0) {
   char *result = strdup(argv0);
   // Load device drivers for boot path
-  printf("Resolve root: argv[0] is %s, guessing device type\n", argv0);
 
 #ifdef LUNA_EMULATOR_BUILD
   // PCSX2's direct-ELF launcher maps the ELF directory to host:, but on
@@ -517,7 +471,6 @@ char *resolveRootDevice(char *argv0) {
   // host device root as the current directory so adjacent config/runtime
   // files remain discoverable.
   if (!strncmp(argv0, "host:", 5)) {
-    printf("Resolve root: using PCSX2 host device root\n");
     free(result);
     initModules(MODE_BASIC);
     return strdup("host:/");
@@ -526,35 +479,28 @@ char *resolveRootDevice(char *argv0) {
 
   ModeType device = guessDeviceType(argv0);
   if (device == MODE_BASIC) {
-    printf("Resolve root: loading basic drivers\n");
     initModules(MODE_BASIC);
     return result;
   } else if (device == MODE_MMCE) {
-    printf("Resolve root: loading MMCE drivers\n");
     initModules(MODE_MMCE);
     return result;
   } else if (device == MODE_HDL) {
-    printf("Resolve root: loading HDD drivers\n");
     initModules(MODE_HDL);
     probePath(argv0, 10);
     return result;
   } else if (device == MODE_ATA) {
-    printf("Resolve root: loading ATA drivers\n");
     initModules(MODE_ATA);
     probePath(argv0, 10);
     return result;
   } else if (device == MODE_USB) {
-    printf("Resolve root: loading USB drivers\n");
     initModules(MODE_USB);
     probePath(argv0, 2);
     return result;
   } else if (device == MODE_MX4SIO) {
-    printf("Resolve root: loading MX4SIO drivers\n");
     initModules(MODE_MX4SIO);
     probePath(argv0, 2);
     return result;
   } else if (device == MODE_BDM) {
-    printf("Resolve root: probing root path for BDM device\n");
     initModules(MODE_ATA | MODE_USB);
 
     if (argv0[4] == ':' || argv0[6] != '/') {
@@ -573,21 +519,17 @@ char *resolveRootDevice(char *argv0) {
       if (pass) {
         // Loading an unused memory-card adapter can block USB startup.
         // Keep MX4SIO boot support as a separate, clean-driver fallback.
-        printf("Resolve root: trying MX4SIO boot fallback\n");
         initStorageModules(MODE_MX4SIO, 1);
       }
       for (int i = 0; i < 10; i++) {
         result[4] = '0' + (originalIndex - '0' + i) % 10;
-        printf("Resolve root: probing %s\n", result);
         if (!probePath(result, 2)) {
-          printf("Resolve root: found root path\n");
           return result;
         }
       }
     }
     // Keep the original directory available to the normal config fallbacks.
     result[4] = originalIndex;
-    printf("Resolve root: boot file not found on any BDM volume\n");
   }
 
   return result;

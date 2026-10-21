@@ -47,7 +47,6 @@ void refreshPSBBNCovers(TargetList *titles, int selectedTitleIdx, int previousTi
                         int useFullResolution);
 void refreshCollectionCovers(TargetList *titles, int selectedTitleIdx, int previousTitleIdx);
 void refreshOrbitCovers(TargetList *titles, int selectedTitleIdx, int previousTitleIdx);
-int collectionArtBackgroundAvailable(void);
 // Applies to running decodes as well as future requests; retains cached pixels.
 void setCollectionArtForeground(int foreground);
 void serviceCollectionCovers(TargetList *titles, int selectedTitleIdx);
@@ -55,7 +54,6 @@ void serviceCollectionCovers(TargetList *titles, int selectedTitleIdx);
 int serviceCollectionEntryCovers(TargetList *titles, int selectedTitleIdx);
 void serviceCollectionCoversNavigating(TargetList *titles, int selectedTitleIdx,
                                       int direction, int fastScrolling, int flowOffset);
-void recordCollectionCoverBind(uint32_t elapsedMs);
 void stopCollectionFarArtWorker(TargetList *titles, int selectedTitleIdx);
 void serviceOrbitCovers(TargetList *titles, int selectedTitleIdx);
 // Rear-slot replacement keeps a small outgoing cover while the new art fades in.
@@ -77,9 +75,6 @@ void refreshScrollCover(Target *target, int fastScrolling, uint32_t now);
 GSTEXTURE *getScrollCoverTexture(int *resolved);
 void refreshScrollCarouselCovers(TargetList *titles, int selectedTitleIdx, int fastScrolling);
 GSTEXTURE *getScrollCarouselCover(int cacheIdx, int *resolved);
-void refreshScrollBackground(Target *target, int fastScrolling, uint32_t now);
-GSTEXTURE *getScrollBackgroundTexture(void);
-void releaseScrollBackground(void);
 void releaseOrbsArt(void);
 
 #endif

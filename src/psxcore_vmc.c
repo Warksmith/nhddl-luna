@@ -7,7 +7,6 @@
 #include "psxcore_file.h"
 #include "psxcore_hash.h"
 #include "psxcore_boot.h"
-#include "dprintf.h"
 #include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -53,7 +52,6 @@ static int writeAll(int fd, const void *data, unsigned size) {
     if (take > 4096) take = 4096;
     int n = fileXioWrite(fd, (const unsigned char *)data + done, take);
     if (n <= 0 || (unsigned)n > take) {
-      DPRINTF("PS1 card write: fd=%d completed=%u total=%u result=%d\n", fd, done, size, n);
       return -1;
     }
     done += n;
@@ -75,14 +73,14 @@ static const char *readExact(const char *path, void *data, unsigned size) {
 static const char *writeFresh(const char *path, const void *data, unsigned size) {
   if (!missing(path)) return "A file already exists or needs recovery.";
   int fd = fileXioOpen(path, FIO_O_WRONLY | FIO_O_CREAT, 0666);
-  if (fd < 0) { DPRINTF("PS1 card create: path=%s result=%d\n", path, fd); return "Cannot create the file."; }
+  if (fd < 0) { return "Cannot create the file."; }
   int bad = writeAll(fd, data, size);
   if (fileXioClose(fd) < 0) bad = 1;
   void *check = malloc(size);
   if (!check) return "Not enough memory to verify the file.";
   if (!bad && (readExact(path, check, size) || memcmp(check, data, size))) bad = 1;
   free(check);
-  if (bad) { DPRINTF("PS1 card verification failed: path=%s bytes=%u\n", path, size); return "The write failed. Staged files were preserved for recovery."; }
+  if (bad) { return "The write failed. Staged files were preserved for recovery."; }
   return NULL;
 }
 // Publish only a newly created, reopened and byte-verified file.

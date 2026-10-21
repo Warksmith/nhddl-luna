@@ -2,25 +2,19 @@
 #include "psxcore_file.h"
 #include <io_common.h>
 
-typedef struct {
-  const char *const *labels;
-  int art;
-} Ps1Actions;
-
 static int ps1ActionRow(int index, char *name, size_t nameSize, char *detail,
-    size_t detailSize, CardArtType *art, void *context) {
-  Ps1Actions *menu = context;
-  snprintf(name, nameSize, "%s", lunaText(menu->labels[index])); detail[0] = 0;
-  *art = menu->art ? CARD_ART_SLOT_1 : CARD_ART_NONE;
+    size_t detailSize, void *context) {
+  const char *const *labels = context;
+  snprintf(name, nameSize, "%s", lunaText(labels[index])); detail[0] = 0;
   (void)detailSize; return 1;
 }
 static int ps1Action(const char *title, const char *subtitle, const char *status,
     const char *const *labels, int count, int selected) {
-  Ps1Actions menu = {labels, 0}; BrowserSelector selector = {.selected = -1};
+  BrowserSelector selector = {.selected = -1};
   for (;;) {
     drawBrowserFrameSelected(lunaText(title), subtitle, lunaText(status),
         PROMPT_TWO(ICON_CROSS, lunaText("Select"), ICON_TRIANGLE, lunaText("Back")),
-        count, selected, browserFirstRow(selected), 0, ps1ActionRow, &menu, &selector);
+        count, selected, browserFirstRow(selected), ps1ActionRow, (void *)labels, &selector);
     int input = readInput();
     if (input & (PAD_CIRCLE | PAD_TRIANGLE)) return -1;
     if (input & PAD_UP) selected = (selected + count - 1) % count;
@@ -64,9 +58,6 @@ static void ps1Busy(const char *message) {
 const char *uiPs1VmcLoad(Target *target,LunaPsxVmcSettings *settings) {
   ps1Busy("Reading memory card settings...");return lunaPsxVmcLoad(target,settings,NULL);
 }
-const char *uiPs1VmcPrepare(Target *target,LunaPsxVmcSettings *settings) {
-  (void)target;ps1Busy("Preparing and verifying shared memory cards...");return lunaPsxVmcPrepare(settings,1);
-}
 int uiPs1VmcPolicy(Target *target,LunaPsxVmcSettings *settings) {
   static const char *const labels[]={"Default shared cards","Choose named cards"};
   int choice=ps1Action("Memory cards",target->name,
@@ -96,7 +87,7 @@ static int ps1ChooseRoot(char root[8]) {
     drawBrowserFrameSelected(lunaText("PlayStation memory cards"), lunaText("Choose a drive"),
         count ? lunaText("Choose where the card set will be stored.") : lunaText("No supported local drives found."),
         PROMPT_TWO(ICON_CROSS, lunaText("Select"), ICON_TRIANGLE, lunaText("Back")),
-        count, selected, 0, 0, rootRow, roots, &selector);
+        count, selected, 0, rootRow, roots, &selector);
     int input = readInput();
     if (input & (PAD_CIRCLE | PAD_TRIANGLE)) break;
     if (count && (input & PAD_UP)) selected = (selected + count - 1) % count;
@@ -108,12 +99,12 @@ static int ps1ChooseRoot(char root[8]) {
 
 
 typedef struct {char key[49],detail[32];} Ps1SetEntry;
-static int ps1SetRow(int index,char *name,size_t nameSize,char *detail,size_t detailSize,CardArtType *art,void *context) {
+static int ps1SetRow(int index,char *name,size_t nameSize,char *detail,size_t detailSize,void *context) {
   Ps1SetEntry *sets=context;
   if(!index){snprintf(name,nameSize,"%s",lunaText("Create named pair"));snprintf(detail,detailSize,"2 x 128 KB");}
   else if(index==1){snprintf(name,nameSize,"%s",lunaText("Default shared cards"));detail[0]=0;}
   else{snprintf(name,nameSize,"%s",sets[index-2].key);snprintf(detail,detailSize,"%s",sets[index-2].detail);}
-  *art=CARD_ART_SLOT_1;return 1;
+  return 1;
 }
 static int ps1LoadSets(const char *root,Ps1SetEntry *sets) {
   char directory[128];snprintf(directory,sizeof(directory),"%s/POPS/CARDS",root);
@@ -153,9 +144,6 @@ static int ps1CreateAt(const char *root,Target *target,LunaPsxVmcSettings *setti
   if(target)return ps1Assign(target,settings,root,key);
   ps1Message("Created two formatted 128 KB cards.");return 0;
 }
-int uiPs1VmcCreate(Target *target,LunaPsxVmcSettings *settings) {
-  char root[8];return ps1ChooseRoot(root)?ps1CreateAt(root,target,settings):0;
-}
 // A bounded, ordinary storage picker; imports are validated after selection.
 static int ps1PickPath(int folder, const char *heading, char out[256]) {
   BrowserRoot *roots = calloc(BROWSER_MAX_ROOTS, sizeof(*roots));
@@ -170,7 +158,7 @@ static int ps1PickPath(int folder, const char *heading, char out[256]) {
         folder==2 ? lunaText("Choose a VCD on the game's drive.") : lunaText("Choose a raw 128 KB memory card image."),
         folder==1 && active >= 0 ? PROMPT_TWO(ICON_SQUARE, lunaText("Choose folder"), ICON_TRIANGLE, lunaText("Back")) :
         PROMPT_TWO(ICON_CROSS, lunaText("Open/Select"), ICON_TRIANGLE, lunaText("Back")),
-        active < 0 ? rootCount : count, selected, browserFirstRow(selected), 0,
+        active < 0 ? rootCount : count, selected, browserFirstRow(selected),
         active < 0 ? rootRow : fileRow, active < 0 ? (void *)roots : (void *)entries, &selector);
     int input = readInput();
     if (input & (PAD_CIRCLE | PAD_TRIANGLE)) {
@@ -294,7 +282,7 @@ static int ps1BrowseSets(Target *target,LunaPsxVmcSettings *settings) {
       drawBrowserFrameSelected(lunaText("PlayStation memory cards"),root,
           target?lunaText("Choose a shared pair. Press Start in game settings to save."):lunaText("Create shared cards, or open a pair to manage its saves."),
           PROMPT_TWO(ICON_CROSS,target?lunaText("Select/Create"):lunaText("Open/Create"),ICON_TRIANGLE,lunaText("Back")),
-          count+2,selected,browserFirstRow(selected),128,ps1SetRow,sets,&selector);
+          count+2,selected,browserFirstRow(selected),ps1SetRow,sets,&selector);
       int input=readInput();if(input&(PAD_CIRCLE|PAD_TRIANGLE))break;
       if(input&PAD_UP)selected=(selected+count+1)%(count+2);
       else if(input&PAD_DOWN)selected=(selected+1)%(count+2);

@@ -1,7 +1,6 @@
 // LUNA 2026
 #include "common.h"
 #include "ui/language.h"
-#include "dprintf.h"
 #include "favorites.h"
 #include "neutrino.h"
 #include "cheat_storage.h"
@@ -228,7 +227,6 @@ int psbbnFieldStableHeight(void) {
 void initVMode(GSGLOBAL *gsGlobal) {
   switch (LAUNCHER_OPTIONS.vmode) {
   case GS_MODE_NTSC:
-    DPRINTF("Forcing NTSC mode\n");
     gsGlobal->Mode = GS_MODE_NTSC;
     gsGlobal->Interlace = GS_INTERLACED;
     gsGlobal->Field = GS_FIELD;
@@ -236,7 +234,6 @@ void initVMode(GSGLOBAL *gsGlobal) {
     gsGlobal->Height = 448;
     break;
   case GS_MODE_PAL:
-    DPRINTF("Forcing PAL mode\n");
     gsGlobal->Mode = GS_MODE_PAL;
     gsGlobal->Interlace = GS_INTERLACED;
     gsGlobal->Field = GS_FIELD;
@@ -244,7 +241,6 @@ void initVMode(GSGLOBAL *gsGlobal) {
     gsGlobal->Height = 512;
     break;
   case GS_MODE_DTV_480P:
-    DPRINTF("Forcing 480p mode\n");
     gsGlobal->Mode = GS_MODE_DTV_480P;
     gsGlobal->Interlace = GS_NONINTERLACED;
     gsGlobal->Field = GS_FRAME;
@@ -257,7 +253,6 @@ void initVMode(GSGLOBAL *gsGlobal) {
 
 int uiInit() {
   if (gsGlobal != NULL) {
-    DPRINTF("Reinitializing UI\n");
     closeUI();
   }
   StartTimerSystemTime();
@@ -283,7 +278,6 @@ int uiInit() {
   // Initialize the DMAC
   int res;
   if ((res = dmaKit_chan_init(DMA_CHANNEL_GIF))) {
-    DPRINTF("ERROR: Failed to initlize DMAC: %d\n", res);
     gsKit_deinit_global(gsGlobal);
     gsGlobal = NULL;
     return res;
@@ -295,7 +289,6 @@ int uiInit() {
   gsKit_display_buffer(gsGlobal); // Switch display buffer to avoid garbage appearing on screen
   initSystemConfigCapture();
   if (reserveUIFontVRAM()) {
-    DPRINTF("ERROR: Failed to reserve font VRAM\n");
     closeUI();
     return -1;
   }
@@ -309,7 +302,6 @@ int uiInit() {
 
   // Initialize resources
   if (initGraphics()) {
-    DPRINTF("ERROR: Failed to initialize font\n");
     closeUI();
     return -1;
   };
@@ -352,15 +344,11 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       gsGlobal->Mode != LAUNCHER_OPTIONS.vmode && (res = uiInit()))
     goto exit;
   if ((gsGlobal == NULL) && (res = uiInit())) {
-    DPRINTF("ERROR: Failed to init UI: %d\n", res);
     goto exit;
   }
 
   // Init gamepad inputs
   initPad();
-#ifdef LUNA_PSXCORE_DEVELOPMENT
-  lunaPsxDevelopment(1);
-#endif
 
   if (titles->total == 0) {
     res = uiMainMenuLoop(0);
@@ -459,8 +447,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   enabledViews = loadEnabledLibraryViews(curTarget);
   if (!(enabledViews & (1U << view)))
     view = lunaNavNextView(view, enabledViews);
-  DPRINTF("Library startup: restored=%d active=%d enabled=0x%x\n",
-          restoredView, view, (unsigned)enabledViews);
   setCollectionArtForeground(view == UI_VIEW_PSBBN);
   if (view == UI_VIEW_PSBBN) {
     entryView = UI_VIEW_PSBBN;
@@ -888,13 +874,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     // Keep rendering after options close, while ignoring the Triangle press
     // that closed them until the button is released.
     input = pollInput();
-#ifdef LUNA_PSXCORE_DEVELOPMENT
-    if ((input & (PAD_SELECT | PAD_START)) == (PAD_SELECT | PAD_START)) {
-      lunaPsxDevelopment(0);
-      while (pollInput() & (PAD_SELECT | PAD_START)) usleep(1000);
-      input = 0;
-    }
-#endif
     // A control held during boot is not a fresh library action. Keep consuming
     // it through the restored Collection reveal, then wait for neutral input.
     int libraryEntryReady = !entryPending &&
@@ -1145,8 +1124,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     if (input & PAD_L3) {
       Target *previousTarget = curTarget;
       libraryPlatformFilter = (TargetFilter)((libraryPlatformFilter + 1) % 3);
-      if (saveLastGameMode(previousTarget, libraryPlatformFilter))
-        DPRINTF("WARN: Could not save selected game mode\n");
+      (void)saveLastGameMode(previousTarget, libraryPlatformFilter);
       gameModeToastActive = 1;
       gameModeToastStartMs = uiNowMs();
       filterTargetView(platformTitles, allTitles, libraryPlatformFilter,
@@ -1155,8 +1133,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       selectedTitleIdx = targetViewIndex(titles, previousTarget);
       if (selectedTitleIdx < 0) selectedTitleIdx = 0;
       if (titles->total) curTarget = getTargetByIdx(titles, selectedTitleIdx);
-      DPRINTF("Library platform=%s total=%d favorites=%d\n",
-              targetFilterLabel(libraryPlatformFilter), titles->total, favoritesOnly);
       libraryListChanged = 1;
       goto restart_library_view;
     } else
@@ -1164,8 +1140,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     if ((input & PAD_SELECT) && (!favoritesTabButtonHeld || quickAction == QUICK_SHOW_FAVORITES)) {
       favoritesTabButtonHeld = 1;
       int originalIndex = curTarget->idx;
-      DPRINTF("Library filter switch begin: view=%d favorites=%d total=%d\n",
-              view, favoritesOnly, titles->total);
       favoritesOnly = !favoritesOnly;
       filterTargetView(platformTitles, allTitles, libraryPlatformFilter,
                        favoritesOnly ? allFavoriteFlags : NULL);
@@ -1285,15 +1259,10 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         classicNavHeld = 0;
         classicRepeat.direction = 0;
       }
-      if (saveLastLibraryView(curTarget, view))
-        DPRINTF("WARN: Could not save selected library view\n");
+      (void)saveLastLibraryView(curTarget, view);
 #ifdef LUNA_ENABLE_PSXCORE
-      if (saveLastGameMode(curTarget, libraryPlatformFilter))
-        DPRINTF("WARN: Could not save selected game mode\n");
+      (void)saveLastGameMode(curTarget, libraryPlatformFilter);
 #endif
-      if (libraryListChanged)
-        DPRINTF("Library filter switch done: view=%d favorites=%d total=%d\n",
-                view, favoritesOnly, titles->total);
     } else if ((quickAction == QUICK_TOGGLE_FAVORITE || (view == UI_VIEW_CLASSIC && (input & PAD_SQUARE))) &&
                !favoriteButtonHeld && titles->total > 0) {
       int originalIndex = curTarget->idx;
@@ -1437,7 +1406,6 @@ exit:
       closeUI();
       res = -1;
     }
-    DPRINTF("Storage refresh: display retained, artwork reset\n");
   } else {
     closeUI();
   }
@@ -1448,10 +1416,6 @@ exit:
   return res;
 }
 // Displays Game ID and launches the title
-void uiLaunchTitle(Target *target, ArgumentList *arguments) {
-  uiLaunchTitleWithCheats(target, arguments, NULL);
-}
-
 #ifdef LUNA_ENABLE_PSXCORE
 static void drawPsxLaunchMessage(const char *message,const char *footer) {
   gsKit_TexManager_nextFrame(gsGlobal);
@@ -1646,8 +1610,6 @@ struct {
   int32_t doneSema;          // Used to signal UI splash thread to exit
   int32_t newStringSema;     // Used to signal UI splash thread that a new string is ready
   int32_t drawnSema;         // Used to signal that UI splash thread has finished drawing or closed
-  UILogLevelType level;      // Log level
-  char neutrinoVersion[100]; // Neutrino version string
   char buf[255];             // String buffer. String must be null-terminated
 } logBuffer = {};
 #define THREAD_STACK_SIZE 0x1000
@@ -1655,12 +1617,10 @@ static uint8_t threadStack[THREAD_STACK_SIZE] __attribute__((aligned(16)));
 
 // Initializes and starts UI splash thread
 int startSplashScreen() {
-  DPRINTF("Starting UI splash thread\n");
   splashVisibleStartMs = uiNowMs();
   // Use the PS2 ROM's original orb sprites for the boot formation. The
   // library loads its saved appearance after the splash closes.
-  if (setAmbientOrbsAppearance(ORBS_APPEARANCE_PS2_ORIGINAL))
-    DPRINTF("WARNING: PS2 original orb masks unavailable for splash\n");
+  (void)setAmbientOrbsAppearance(ORBS_APPEARANCE_PS2_ORIGINAL);
   resetAmbientOrbsSplash(splashVisibleStartMs);
   // Initialize splash semaphores
   ee_sema_t semaphore;
@@ -1713,7 +1673,7 @@ void uiSplashThread() {
 
     // Successful boot stays intentionally minimal. Only surface a fatal error
     // so a failed initialization cannot be mistaken for endless loading.
-    if ((logBuffer.level == LEVEL_ERROR) && (logBuffer.buf[0] != '\0'))
+    if (logBuffer.buf[0] != '\0')
       drawTextWindow(0, logStartY, gsGlobal->Width, gsGlobal->Height - footerHeight, 2, ErrorTextColor, ALIGN_CENTER, logBuffer.buf);
 
     gsKit_queue_exec(gsGlobal);
@@ -1739,15 +1699,13 @@ void stopUISplashThread() {
   DeleteSema(logBuffer.drawnSema);
 }
 
-// Logs to splash screen and debug console in a thread-safe way
-void uiSplashLogString(UILogLevelType level, const char *str, ...) {
+// Displays fatal initialization errors on the splash screen
+void uiSplashError(const char *str, ...) {
   va_list args;
   va_start(args, str);
 
-  logBuffer.level = level;
   vsnprintf(logBuffer.buf, 255, str, args);
   va_end(args);
-  DPRINTF(logBuffer.buf);
 
   if (!gsGlobal)
     return;
@@ -1755,30 +1713,5 @@ void uiSplashLogString(UILogLevelType level, const char *str, ...) {
   SignalSema(logBuffer.newStringSema);
   WaitSema(logBuffer.drawnSema);
 
-  switch (level) {
-  case LEVEL_INFO_NODELAY:
-    return;
-  case LEVEL_INFO:
-    sleep(1);
-    return;
-  case LEVEL_WARN:
-  case LEVEL_ERROR:
-    sleep(2);
-    return;
-  }
-}
-
-// Sets Neutrino version on the splash screen
-void uiSplashSetNeutrinoVersion(const char *str) {
-  if (!gsGlobal)
-    return;
-
-  if (str[0] == '\0')
-    return;
-
-  strcpy(logBuffer.neutrinoVersion, "Neutrino");
-  strncat(logBuffer.neutrinoVersion, str, 100 - 10);
-
-  SignalSema(logBuffer.newStringSema);
-  WaitSema(logBuffer.drawnSema);
+  sleep(2);
 }

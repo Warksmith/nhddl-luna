@@ -1,6 +1,5 @@
 #include "common.h"
 #include "devices/devices.h"
-#include "dprintf.h"
 #include "neutrino.h"
 #include "devices/init.h"
 #include "options.h"
@@ -18,7 +17,6 @@ int forwardBoot() {
   else
     res = initModules(MODE_NONE);
   if (res) {
-    DPRINTF("Failed to init modules: %d\n", res);
     return res;
   }
 
@@ -26,17 +24,14 @@ int forwardBoot() {
 
   int deviceCount = initDeviceMap();
   if (deviceCount <= 0) {
-    DPRINTF("Failed to init devices: %d\n", deviceCount);
     return -ENODEV;
   }
 
   if ((res = tryFile(LAUNCHER_OPTIONS.image)) < 0) {
-    DPRINTF("Target image not found: %d\n", res);
     return -ENOENT;
   }
 
   if (findNeutrinoELF(NULL)) {
-    DPRINTF("Failed to find Neutrino\n");
     return -ENOENT;
   }
 
@@ -67,7 +62,6 @@ int forwardBoot() {
     }
 
   if (!target.device) {
-    DPRINTF("Target device not found\n");
     return -ENODEV;
   }
 

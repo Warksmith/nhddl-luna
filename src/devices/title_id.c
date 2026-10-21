@@ -1,6 +1,5 @@
 // Gets title ID from PS2 DVD
 #include "devices/title_id.h"
-#include "dprintf.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -107,7 +106,6 @@ static int getTOCEntry(int fd, const ISOExtent *root, uint64_t isoSize,
 char *getTitleID(char *path) {
   int fd = open(path, O_RDONLY);
   if (fd < 0) {
-    DPRINTF("WARN: %s: Failed to open ISO\n", path);
     errno = EIO;
     return NULL;
   }
@@ -119,7 +117,6 @@ char *getTitleID(char *path) {
   error = getPVD(fd, (uint64_t)isoSize, &root);
   if (!error) error = getTOCEntry(fd, &root, (uint64_t)isoSize, &systemCNF);
   if (error || systemCNF.size > MAX_SYSTEM_CNF_SIZE) {
-    DPRINTF("WARN: %s: Invalid ISO metadata or SYSTEM.CNF extent\n", path);
     if (error != -EIO) error = -EINVAL;
     goto done;
   }
@@ -127,7 +124,6 @@ char *getTitleID(char *path) {
   if (!text) { error = -ENOMEM; goto done; }
   if (lseek64(fd, (int64_t)systemCNF.offset, SEEK_SET) < 0 ||
       readExact(fd, text, systemCNF.size)) {
-    DPRINTF("WARN: %s: Failed to read SYSTEM.CNF\n", path);
     error = -EIO;
     goto done;
   }

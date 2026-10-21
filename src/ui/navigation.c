@@ -224,61 +224,6 @@ int lunaNavRandomTarget(int total, int selectedIndex, uint32_t randomSeed) {
   return lunaNavWrap(total, selectedIndex + jump);
 }
 
-int lunaNavMarkedCount(const uint8_t *marked, int total) {
-  int count = 0;
-  int index;
-  if (marked == NULL || total <= 0)
-    return 0;
-  for (index = 0; index < total; index++)
-    count += marked[index] != 0;
-  return count;
-}
-
-int lunaNavMarkedRank(const uint8_t *marked, int total, int index) {
-  int rank = 0;
-  int current;
-  if (marked == NULL || index < 0 || index >= total || !marked[index])
-    return -1;
-  for (current = 0; current < index; current++)
-    rank += marked[current] != 0;
-  return rank;
-}
-
-int lunaNavMarkedByRank(const uint8_t *marked, int total, int rank) {
-  int count = lunaNavMarkedCount(marked, total);
-  int current;
-  if (count <= 0)
-    return -1;
-  rank = lunaNavWrap(count, rank);
-  for (current = 0; current < total; current++) {
-    if (marked[current] && rank-- == 0)
-      return current;
-  }
-  return -1;
-}
-
-int lunaNavMarkedStep(const uint8_t *marked, int total, int index, int direction) {
-  int rank = lunaNavMarkedRank(marked, total, index);
-  if (rank < 0)
-    return lunaNavMarkedByRank(marked, total, (direction < 0) ? -1 : 0);
-  return lunaNavMarkedByRank(marked, total, rank + ((direction < 0) ? -1 : 1));
-}
-
-int lunaNavMarkedPage(const uint8_t *marked, int total, int index, int pageSize,
-                      int direction) {
-  int count = lunaNavMarkedCount(marked, total);
-  int rank = lunaNavMarkedRank(marked, total, index);
-  if (count <= 0 || pageSize <= 0)
-    return -1;
-  if (rank < 0)
-    return lunaNavMarkedByRank(marked, total, (direction < 0) ? count - 1 : 0);
-  if (direction > 0)
-    rank = (rank == count - 1) ? 0 : ((rank + pageSize < count) ? rank + pageSize : count - 1);
-  else
-    rank = (rank == 0) ? count - 1 : ((rank - pageSize > 0) ? rank - pageSize : 0);
-  return lunaNavMarkedByRank(marked, total, rank);
-}
-
 const UILibraryView lunaViewCycleOrder[UI_VIEW_COUNT] = {
     UI_VIEW_CLASSIC, UI_VIEW_PSBBN, UI_VIEW_ORBIT,
     UI_VIEW_3D, UI_VIEW_ORBS};

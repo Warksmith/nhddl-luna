@@ -2,7 +2,6 @@
 #include "common.h"
 #include "devices/devices.h"
 #include "storage.h"
-#include "dprintf.h"
 #include "ui/ui.h"
 #include <errno.h>
 #include <dirent.h>
@@ -30,7 +29,6 @@ int initMMCEDevices(int newDeviceIdx) {
     directory = opendir(mmceMountpoint);
     if (directory != NULL) {
       closedir(directory);
-      uiSplashLogString(LEVEL_INFO_NODELAY, "Found device %s\n", mmceMountpoint);
 
       deviceModeMap[newDeviceIdx].mode = MODE_MMCE;
       deviceModeMap[newDeviceIdx].index = i;
@@ -57,7 +55,6 @@ void mmceMountVMC(char *titleID) {
 
     // Do not mount VMC if Neutrino is on the (virtual) memory card
     if (!strncmp(mcMountpoint, NEUTRINO_ELF_PATH, 3)) {
-      DPRINTF("WARN: Refusing to mount VMC on %s\n", mmceMountpoint);
       continue;
     }
 
@@ -74,7 +71,6 @@ void mmceMountVMC(char *titleID) {
     for (int i = 0; i < 15; i++) {
       sleep(1);
       if ((fileXioDevctl(mmceMountpoint, 0x2, NULL, 0, NULL, 0) & 1) == 0) {
-        DPRINTF("Mounted VMC for %s on %s\n", titleID, mmceMountpoint);
         break;
       }
     }

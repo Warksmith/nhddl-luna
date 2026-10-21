@@ -12,7 +12,6 @@ int saveFavoriteFlags(TargetList *titles, const uint8_t *flags, size_t flagCount
 TargetList *buildFavoriteTargetList(TargetList *titles, const uint8_t *flags,
                                     size_t flagCount);
 // Filter indexes differ from canonical Target.idx. Updates allocate nothing.
-int favoriteTargetIndex(const TargetList *favorites, int originalIndex);
 int setFavoriteTarget(TargetList *favorites, Target *source, int enabled);
 
 #endif

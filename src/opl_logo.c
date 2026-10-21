@@ -1,6 +1,5 @@
 // Disc-logo validation follows the pinned loader's src/util.c:CheckPS2Logo.
 #include "opl_logo.h"
-#include "dprintf.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -52,7 +51,5 @@ int oplPrepareLogo(int discFd) {
     valid = checksum == (romver[4] == 'E' ? 0x1555abu : 0x120519u);
   }
   free(logo);
-  DPRINTF("OPL: startup logo %s (checksum %06x, BIOS region %c)\n",
-          valid ? "enabled" : "skipped", (unsigned int)checksum, romver[4]);
   return valid;
 }

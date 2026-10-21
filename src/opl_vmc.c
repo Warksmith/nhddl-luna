@@ -4,7 +4,6 @@
 #include "opl_pfs_vmc.h"
 #include "devices/devices.h"
 #include "storage.h"
-#include "dprintf.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -174,7 +173,6 @@ int oplPrepareVmcs(Target *target, ArgumentList *arguments, const LunaOplDevice 
       close(fd);
       fds[slot] = -1;
     }
-    DPRINTF("OPL: VMC slot %d prepared (%u pages)\n", slot + 1, cards[slot]->cspec.CardSize);
     count++;
   }
   return count;

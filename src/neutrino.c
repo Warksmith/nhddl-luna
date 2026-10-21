@@ -2,7 +2,6 @@
 #include "common.h"
 #include "devices/devices.h"
 #include "devices/init.h"
-#include "dprintf.h"
 #include "neutrino.h"
 #include "opl_ata.h"
 #include "opl_devices.h"
@@ -69,7 +68,8 @@ int assembleArgv(ArgumentList *arguments, char **argv[]) {
 
   *argv[0] = NEUTRINO_ELF_PATH;
   while (curArg != NULL) {
-    if (!curArg->isDisabled && strcmp(curArg->arg, "luna_core") != 0 &&
+    if (!curArg->isDisabled && strcmp(curArg->arg, "dbc") != 0 &&
+        strcmp(curArg->arg, "luna_core") != 0 &&
         strcmp(curArg->arg, "luna_ps1_code_validation") != 0 &&
         strcmp(curArg->arg, "luna_ps1_start_disc") != 0 &&
         strcmp(curArg->arg, "luna_opl_compat") != 0 &&
@@ -104,7 +104,6 @@ void launchTitleWithProgress(Target *target, ArgumentList *arguments,
   char *payload = NULL;
   char error[160];
   if (lunaCheatsPrepare(target, NULL, &payload, error, sizeof(error))) {
-    DPRINTF("ERROR: %s\n", error);
     return;
   }
   launchTitleWithCheatProgress(target, arguments, payload, progress, userdata);
@@ -115,7 +114,6 @@ void launchTitleWithCheatProgress(Target *target, ArgumentList *arguments,
                                   const char *payload,
                                   LaunchProgressCallback progress, void *userdata) {
   if (!launchTitleArgumentsFit(target, arguments, payload)) {
-    DPRINTF("ERROR: launch arguments exceed the kernel handoff buffer\n");
     return;
   }
   // LUNA metadata is not a Neutrino command-line option. A missing or disabled
@@ -126,7 +124,6 @@ void launchTitleWithCheatProgress(Target *target, ArgumentList *arguments,
         !core->isDisabled && core->value != NULL &&
         strcmp(core->value, "opl") == 0) {
       int result = launchOplTitle(target, arguments, payload, progress, userdata);
-      DPRINTF("OPL launch unavailable (%d); using Neutrino\n", result);
     }
   }
   // Append arguments
@@ -164,7 +161,6 @@ void launchTitleWithCheatProgress(Target *target, ArgumentList *arguments,
       if (pfsCard) {
         const char *partition = getMountedPFSPartition();
         if (partition == NULL) {
-          DPRINTF("ERROR: PFS VMC partition is not mounted\n");
           return;
         }
         appendArgument(arguments, newArgument("pfs", (char *)partition));
@@ -172,23 +168,19 @@ void launchTitleWithCheatProgress(Target *target, ArgumentList *arguments,
     }
     break;
   default:
-    DPRINTF("ERROR: Unsupported mode\n");
     return;
   }
 
   if (progress != NULL)
     progress(LAUNCH_STAGE_SYNCING, userdata);
 
-  DPRINTF("Updating last launched title\n");
   if (updateLastLaunchedTitle(target->device, target->fullPath)) {
-    DPRINTF("ERROR: Failed to update last launched title\n");
   }
 
   // Sync storage device before loading Neutrino
   if (target->device->sync)
     target->device->sync();
 
-  DPRINTF("Mounting VMC on MMCE devices\n");
   mmceMountVMC(target->id);
 
   // Append bsd and ISO path
@@ -218,13 +210,10 @@ void launchTitleWithCheatProgress(Target *target, ArgumentList *arguments,
   size_t handoffSize = argCount * sizeof(char *);
   for (int i = 0; i < argCount; i++) handoffSize += strlen(argv[i]) + 1;
   if (handoffSize > LAUNCH_ARGS_BYTES) {
-    DPRINTF("ERROR: launch arguments exceed the kernel handoff buffer\n");
     return;
   }
 
-  DPRINTF("Launching %s (%s) with arguments:\n", target->name, target->id);
   for (int i = 0; i < argCount; i++) {
-    DPRINTF("%d: %s\n", i + 1, argv[i]);
   }
 
   if (progress != NULL)
@@ -301,46 +290,6 @@ int findNeutrinoELF(char *cwdPath) {
     return -ENOENT;
   }
   return 0;
-}
-
-// Reads version.txt from NEUTRINO_ELF_PATH
-// Returns empty string if the file could not be read
-char *getNeutrinoVersion() {
-  // Get full path to Neutrino directory
-  const char *slashIdx = strrchr(NEUTRINO_ELF_PATH, '/');
-  if (slashIdx == NULL)
-    return strdup("");
-
-  // Get the length of directory path
-  int len = slashIdx - NEUTRINO_ELF_PATH;
-
-  // Build path to version.txt
-  char versionFilePath[PATH_MAX];
-  strncpy(versionFilePath, NEUTRINO_ELF_PATH, len);
-  versionFilePath[len] = '\0';
-  strcat(versionFilePath, "/version.txt");
-
-  // Open version.txt
-  FILE *file = fopen(versionFilePath, "r");
-  if (file == NULL)
-    return strdup("");
-
-  // Read the first line into versionFilePath, reusing it
-  versionFilePath[0] = ' ';
-  if (fgets(&versionFilePath[1], sizeof(versionFilePath) - 1, file) == NULL) {
-    fclose(file);
-    return strdup("");
-  }
-
-  fclose(file);
-
-  // Trim newline
-  len = strlen(versionFilePath);
-  if (len > 0 && versionFilePath[len - 1] == '\n') {
-    versionFilePath[len - 1] = '\0';
-  }
-
-  return strdup(versionFilePath);
 }
 
 __attribute__((section("._launch_args"))) // Place launchArgs in the _launch_args memory section

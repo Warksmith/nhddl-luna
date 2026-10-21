@@ -2,7 +2,6 @@
 // LUNA 2026
 #include "common.h"
 #include "devices/devices.h"
-#include "dprintf.h"
 #include "ui/ui.h"
 #include <errno.h>
 #include <kernel.h>
@@ -57,7 +56,6 @@ int getBDMDeviceDriver(char *mountpoint, struct DeviceMapEntry *entry) {
   entry->mode = mapBDMDriverName(driverName);
   entry->index = deviceNumber;
 
-  uiSplashLogString(LEVEL_INFO_NODELAY, "Found device %s%d (%s)\n", driverName, deviceNumber, mountpoint);
   return 0;
 }
 
@@ -79,13 +77,11 @@ int initBDMDevices(int deviceIdx) {
     char temp = *sep;
     *sep = '\0';
 
-    DPRINTF("Noinit flag set, trying the image mountpoint %s\n", LAUNCHER_OPTIONS.image);
     directory = opendir(LAUNCHER_OPTIONS.image);
     if (directory != NULL)
       closedir(directory);
 
     if (getBDMDeviceDriver(LAUNCHER_OPTIONS.image, &deviceModeMap[deviceIdx]) < 0) {
-      DPRINTF("ERROR: failed to get driver for device %s\n", LAUNCHER_OPTIONS.image);
       *sep = temp;
       return -EIO;
     }
@@ -119,7 +115,6 @@ int initBDMDevices(int deviceIdx) {
     }
 
     if (getBDMDeviceDriver(mountpoint, &deviceModeMap[deviceIdx]) < 0) {
-      DPRINTF("ERROR: failed to get driver for device %s\n", mountpoint);
       return -EIO;
     }
 

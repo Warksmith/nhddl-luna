@@ -248,13 +248,10 @@ TargetList *storageRefresh(TargetList *previous) {
       if (!part) goto fail;
       int result = 0;
       if (scan & mode) {
-        uiSplashLogString(LEVEL_INFO_NODELAY, lunaText("Scanning %s...\n"), lunaText(names[s]));
         result = dev->scan(part, dev);
       }
       if (!(scan & mode) || (result && result != -ENOENT)) {
         if (result) {
-          uiSplashLogString(LEVEL_WARN, "%s: %s (%d)\n",
-                            lunaText(names[s]), lunaText("Scan failed"), result);
           freeTargetList(part);
           part = calloc(1, sizeof(*part));
           if (!part) goto fail;

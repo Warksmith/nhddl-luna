@@ -2,7 +2,6 @@
 #include "favorites.h"
 #include "common.h"
 #include "devices/devices.h"
-#include "dprintf.h"
 #include "options.h"
 #include <errno.h>
 #include <ps2sdkapi.h>
@@ -134,7 +133,6 @@ int saveFavoriteFlags(TargetList *titles, const uint8_t *flags, size_t flagCount
     return -ENAMETOOLONG;
 
   if (stat(directory, &st) == -1 && mkdir(directory, 0777)) {
-    DPRINTF("ERROR: Failed to create favorites directory: %d\n", errno);
     return -EIO;
   }
   // Do not truncate the only complete copy left by an earlier failed commit.
@@ -144,7 +142,6 @@ int saveFavoriteFlags(TargetList *titles, const uint8_t *flags, size_t flagCount
     return -EIO;
   file = fopen(tempPath, "w");
   if (file == NULL) {
-    DPRINTF("ERROR: Failed to open favorites file: %d\n", errno);
     return -EIO;
   }
 
@@ -163,7 +160,6 @@ int saveFavoriteFlags(TargetList *titles, const uint8_t *flags, size_t flagCount
   }
 
   if (commitConfigFile(tempPath, path)) {
-    DPRINTF("ERROR: Failed to commit favorites file: %d\n", errno);
     return -EIO;
   }
   return 0;
@@ -196,12 +192,6 @@ static int favoriteInsertionRank(const TargetList *favorites, int originalIndex)
     else high = middle;
   }
   return low;
-}
-
-int favoriteTargetIndex(const TargetList *favorites, int originalIndex) {
-  int rank = favoriteInsertionRank(favorites, originalIndex);
-  return rank < favorites->total && favorites->byIndex[rank]->idx == originalIndex
-             ? rank : -1;
 }
 
 int setFavoriteTarget(TargetList *favorites, Target *source, int enabled) {

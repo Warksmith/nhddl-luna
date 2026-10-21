@@ -2,7 +2,6 @@
 #include "options.h"
 #include "common.h"
 #include "devices/devices.h"
-#include "dprintf.h"
 #include "ui/game_options.h"
 #include "storage.h"
 #include <ctype.h>
@@ -92,13 +91,11 @@ int commitConfigFile(const char *tempPath, const char *path) {
   // failed commit. Readers accept the temporary record if a copy is interrupted.
   int source = open(tempPath, O_RDONLY);
   if (source < 0) {
-    DPRINTF("ERROR: Could not open staged config (%d): %s\n", errno, tempPath);
     return -EIO;
   }
   int destination = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
   if (destination < 0) {
     close(source);
-    DPRINTF("ERROR: Could not open config destination (%d): %s\n", errno, path);
     return -EIO;
   }
   char buffer[256];
@@ -116,11 +113,9 @@ int commitConfigFile(const char *tempPath, const char *path) {
     result = -EIO;
   close(source);
   if (result) {
-    DPRINTF("ERROR: Config copy failed: %s (staged record retained)\n", path);
     return result;
   }
   remove(tempPath);
-  DPRINTF("Saved config: %s\n", path);
   return 0;
 }
 
@@ -157,7 +152,6 @@ static int readLastTitleFile(const char *path, char *titlePath, size_t titlePath
 // Gets last launched title path into titlePath
 // Searches for the latest file across all mounted BDM devices
 int getLastLaunchedTitle(char *titlePath, size_t titlePathSize) {
-  DPRINTF("Reading last launched title\n");
   char targetPath[PATH_MAX];
   uint32_t maxTimestamp = 0;
   int found = 0;
@@ -199,7 +193,6 @@ int updateLastLaunchedTitle(struct DeviceMapEntry *device, char *titlePath) {
     device = device->metadev;
   }
 
-  DPRINTF("Writing last launched title as %s\n", titlePath);
   char targetPath[PATH_MAX];
   char tempPath[PATH_MAX];
   if (buildConfigFilePath(targetPath, sizeof(targetPath), device->mountpoint, NULL))
@@ -208,7 +201,6 @@ int updateLastLaunchedTitle(struct DeviceMapEntry *device, char *titlePath) {
   // Make sure config directory exists
   struct stat st;
   if (stat(targetPath, &st) == -1) {
-    DPRINTF("Creating config directory: %s\n", targetPath);
     mkdir(targetPath, 0777);
   }
 
@@ -220,14 +212,12 @@ int updateLastLaunchedTitle(struct DeviceMapEntry *device, char *titlePath) {
   // Stage the complete record before replacing the prior known-good file.
   int fd = open(tempPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
   if (fd < 0) {
-    DPRINTF("ERROR: Failed to open last launched title file: %d\n", fd);
     return -ENOENT;
   }
 
   // Write timestamp
   uint32_t timestamp = getTimestamp();
   if (writeAll(fd, &timestamp, sizeof(timestamp))) {
-    DPRINTF("ERROR: Failed to write last launched title timestamp\n");
     close(fd);
     remove(tempPath);
     return -EIO;
@@ -240,7 +230,6 @@ int updateLastLaunchedTitle(struct DeviceMapEntry *device, char *titlePath) {
 
   size_t writeLen = strlen(titlePath) + 1 - mountpointLen;
   if (writeLen > PATH_MAX || writeAll(fd, titlePath + mountpointLen, writeLen)) {
-    DPRINTF("ERROR: Failed to write last launched title\n");
     close(fd);
     remove(tempPath);
     return -EIO;
@@ -251,7 +240,6 @@ int updateLastLaunchedTitle(struct DeviceMapEntry *device, char *titlePath) {
   // discard the newly completed record even on filesystems without overwrite-rename.
   remove(targetPath);
   if (rename(tempPath, targetPath)) {
-    DPRINTF("ERROR: Failed to commit last launched title: %d\n", errno);
     return -EIO;
   }
   return 0;
@@ -424,7 +412,6 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
     device = device->metadev;
   }
 
-  DPRINTF("Looking for title-specific config for %s (%s)\n", target->name, target->id);
   char directoryPath[PATH_MAX + 1];
   char targetPath[PATH_MAX + 1];
   // Prefer the current config directory, then older installations. Keep the
@@ -466,10 +453,7 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
     if (snprintf(targetPath, sizeof(targetPath), "%s/%s", directoryPath, filename) >= sizeof(targetPath))
       return -ENAMETOOLONG;
 
-    DPRINTF("Loading title-specific config from %s\n", targetPath);
     int ret = loadArgumentList(result, device, targetPath);
-    if (ret)
-      DPRINTF("ERROR: Failed to load argument list: %d\n", ret);
     return ret;
   }
   if (target->discs && target->discs->count && !target->discs->error[0]) {
@@ -481,7 +465,6 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
     Target first = *target; first.discs = NULL; first.name = memberName;
     return getTitleLaunchArguments(result, &first);
   }
-  DPRINTF("Title-specific config not found\n");
   return 0;
 }
 
@@ -510,12 +493,10 @@ int updateTitleLaunchArguments(Target *target, ArgumentList *options) {
     return -ENAMETOOLONG;
   if (buildConfigFilePath(lineBuffer, sizeof(lineBuffer), device->mountpoint, filename))
     return -ENAMETOOLONG;
-  DPRINTF("Saving title-specific config to %s\n", lineBuffer);
 
   // Open file, truncating it
   int fd = open(lineBuffer, O_WRONLY | O_CREAT | O_TRUNC, 0666);
   if (fd < 0) {
-    DPRINTF("ERROR: Failed to open file\n");
     return -EIO;
   }
 
@@ -549,7 +530,6 @@ int updateTitleLaunchArguments(Target *target, ArgumentList *options) {
         goto out;
       }
       if (writeAll(fd, lineBuffer, len)) {
-        DPRINTF("ERROR: Failed to write to file\n");
         ret = -EIO;
         goto out;
       }
@@ -567,7 +547,6 @@ int loadArgumentList(ArgumentList *options, struct DeviceMapEntry *device, char 
   // Open options file
   FILE *file = fopen(filePath, "r");
   if (file == NULL) {
-    DPRINTF("ERROR: Failed to open %s\n", filePath);
     return -ENOENT;
   }
 
@@ -677,7 +656,6 @@ int parseOptionsFile(ArgumentList *result, FILE *file, struct DeviceMapEntry *de
     appendArgument(result, arg);
   }
   if (ferror(file) || !feof(file)) {
-    DPRINTF("ERROR: Failed to read config file\n");
     return -EIO;
   }
 
@@ -836,7 +814,6 @@ ArgumentList *loadLaunchArgumentLists(Target *target) {
   // Initialize global argument list
   ArgumentList *globalArguments = calloc(sizeof(ArgumentList), 1);
   if ((res = getGlobalLaunchArguments(globalArguments, target->device))) {
-    DPRINTF("WARN: Failed to load global launch arguments: %d\n", res);
   }
   int globalOpl = readGameCorePreference(target);
   if (globalOpl < 0) {
@@ -847,7 +824,6 @@ ArgumentList *loadLaunchArgumentLists(Target *target) {
   // Initialize title list and merge global into it
   ArgumentList *titleArguments = calloc(sizeof(ArgumentList), 1);
   if ((res = getTitleLaunchArguments(titleArguments, target))) {
-    DPRINTF("WARN: Failed to load title arguments: %d\n", res);
   }
   int titleLogoOverride = getArgument(titleArguments, "logo") != NULL;
   int titleCoreOverride = getArgument(titleArguments, "luna_core") != NULL;
@@ -868,10 +844,8 @@ ArgumentList *loadLaunchArgumentLists(Target *target) {
   Argument *core = getArgument(result, "luna_core");
   if (titleCoreOverride && core != NULL)
     core->isGlobal = 0;
-  if (!lunaApplyGlobalGameCore(result, globalOpl))
-    DPRINTF("WARN: Failed to add default game core launch argument\n");
-  if (!lunaApplyGlobalPS2Logo(result, loadPS2LogoEnabled(target)))
-    DPRINTF("WARN: Failed to add default PS2 logo launch argument\n");
+  (void)lunaApplyGlobalGameCore(result, globalOpl);
+  (void)lunaApplyGlobalPS2Logo(result, loadPS2LogoEnabled(target));
   return result;
 }
 

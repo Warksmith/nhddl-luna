@@ -1,7 +1,6 @@
 // Implements support for MMCE devices
 #include "common.h"
 #include "devices/devices.h"
-#include "dprintf.h"
 #include "ui/ui.h"
 #include <errno.h>
 #include <kernel.h>
@@ -24,7 +23,6 @@ int initUDPFSDevices(int newDeviceIdx) {
     directory = opendir(udpfsMountpoint);
     if (directory != NULL) {
       closedir(directory);
-      uiSplashLogString(LEVEL_INFO_NODELAY, "Found device %s\n", udpfsMountpoint);
 
       deviceModeMap[newDeviceIdx].mode = MODE_UDPFS;
       deviceModeMap[newDeviceIdx].index = 0;

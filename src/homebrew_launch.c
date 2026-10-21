@@ -1,7 +1,6 @@
 #include "homebrew_launch.h"
 #include "homebrew_elf.h"
 #include "devices/devices.h"
-#include "dprintf.h"
 #include "ui/ambient.h"
 #include "ui/art_cache.h"
 #include "ui/graphics.h"
@@ -69,7 +68,6 @@ const char *lunaHomebrewPrepare(const char *path, LunaHomebrewProgress progress,
   snprintf(control->path, sizeof(control->path), "%s", path);
   control->argv[0] = (uint32_t)(uintptr_t)control->path;
   control->argv[1] = 0;
-  DPRINTF("Homebrew ELF prepared: %s entry=%08x segments=%u\n", path, control->elf.entry, control->elf.count);
   return NULL;
 }
 
@@ -83,7 +81,6 @@ void lunaHomebrewExecute(void) {
   artCacheShutdown();
   closePad();
   syncDeviceMap();
-  DPRINTF("Homebrew ELF handoff: workers stopped, storage synced\n");
   FlushCache(0);
   FlushCache(2);
   TerminateLibrary();

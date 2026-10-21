@@ -83,7 +83,6 @@ int pfs_vmc_map_file(const char *path, const char *partition,
         return -1;
     zone_size = fileXioDevctl("pfs0:", PDIOC_ZONESZ, NULL, 0, NULL, 0);
     if (zone_size != PFS_ZONE_SECTORS * 512) {
-        printf("ERROR: APA VMC requires 8 KiB PFS zones (got %d)\n", zone_size);
         return -1;
     }
     if (fileXioGetStat(partition, &partition_stat) < 0 ||
@@ -161,7 +160,6 @@ int pfs_vmc_map_file(const char *path, const char *partition,
 
     *fragment_count = count;
     *file_size = inode.size;
-    printf("APA VMC mapped: %s (%u extents)\n", path, count);
     result = 0;
 done:
     close(fd);

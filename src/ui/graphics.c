@@ -1,7 +1,6 @@
 // LUNA 2026
 #include "ui/graphics.h"
 #include "ui/ui.h"
-#include "dprintf.h"
 #include "ui/dejavu_sans.h"
 #include "ui/psbbn_font.h"
 #include "ui/utf8.h"
@@ -16,17 +15,6 @@
 #include <png.h>
 #include <stdlib.h>
 
-extern unsigned char virtual_memory_card_png[];
-extern unsigned int size_virtual_memory_card_png;
-extern unsigned char ps1_memory_card_1_png[];
-extern unsigned int size_ps1_memory_card_1_png;
-extern unsigned char ps1_memory_card_2_png[];
-extern unsigned int size_ps1_memory_card_2_png;
-extern unsigned char memory_card_menu_png[];
-extern unsigned int size_memory_card_menu_png;
-extern unsigned char file_explorer_png[];
-extern unsigned int size_file_explorer_png;
-
 // Loads 32-bit RGBA PNG texture from memory into GSTEXTURE and uploads it to GS VRAM.
 static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *buf, size_t size, int whiteTransparentRgb,
                                  int upload);
@@ -36,9 +24,6 @@ GSTEXTURE **fontPages;
 // Graphics textures
 GSTEXTURE *icons;
 GSTEXTURE *gridSelector;
-static GSTEXTURE cardArtTextures[CARD_ART_COUNT];
-static uint8_t cardArtAttempted[CARD_ART_COUNT];
-static uint8_t cardArtLoaded[CARD_ART_COUNT];
 
 // The supplied selector is opaque, with its glow composited on black. Convert
 // it once into a transparent overlay so grid covers remain visible beneath it.
@@ -138,11 +123,6 @@ static void releaseFontPages(void) {
 
 static void releaseGraphicsResources(void) {
   finishGraphicsTransfers();
-  for (int i = 0; i < CARD_ART_COUNT; i++) {
-    releaseGraphicsTexture(&cardArtTextures[i]);
-    cardArtLoaded[i] = 0;
-    cardArtAttempted[i] = 0;
-  }
   // Font pages use the reserved user buffer, not texture-manager allocations.
   releaseFontPages();
   releaseGraphicsTexture(icons);
@@ -162,8 +142,6 @@ static void prepareFontPageAlpha(GSTEXTURE *page) {
   for (size_t i = 0; i < (size_t)page->Width * page->Height; i++)
     pixels[i * 4 + 3] = 0x80 - pixels[i * 4 + 3];
 }
-
-UIFont getUIFont(void) { return activeUIFont; }
 
 int setUIFont(UIFont selection) {
   if (selection < UI_FONT_DEJAVU || selection >= UI_FONT_COUNT)
@@ -219,7 +197,6 @@ int initGraphics() {
   if (graphicsInitialized)
     return 0;
   if (font->pageCount == 0) {
-    DPRINTF("ERROR: Invalid number of font pages\n");
     return -1;
   }
   if (setUIFont(activeUIFont))
@@ -229,7 +206,6 @@ int initGraphics() {
   icons = calloc(sizeof(GSTEXTURE), 1);
   if (icons == NULL ||
       gsKit_texture_png_mem(gsGlobal, icons, ICONS_PNG, SIZE_ICONS_PNG, 0, 1)) {
-    DPRINTF("ERROR: Failed to load icons texture\n");
     goto fail;
   }
 
@@ -245,7 +221,6 @@ int initGraphics() {
       gridSelector = NULL;
     }
   } else {
-    DPRINTF("WARNING: Failed to load Grid selector texture\n");
     if (gridSelector != NULL) {
       releaseGraphicsTexture(gridSelector);
       free(gridSelector);
@@ -297,71 +272,6 @@ void drawIconScaled(float x, float y, int z, uint64_t color, IconType iconType, 
                             icon.x + icon.width + 1,  // u2 (source texture)
                             icon.y + icon.height + 1, // v2
                             z, color);
-  gsKit_set_test(gsGlobal, GS_ATEST_ON);
-  gsKit_set_primalpha(gsGlobal, GS_SETREG_ALPHA(0, 1, 0, 1, 0), 0);
-}
-
-void drawCardArt(CardArtType card, float x, float y, float size) {
-  static const unsigned char *const pngData[] = {
-      virtual_memory_card_png, ps1_memory_card_1_png,
-      ps1_memory_card_2_png, memory_card_menu_png, file_explorer_png};
-  static const unsigned int *const pngSizes[] = {
-      &size_virtual_memory_card_png, &size_ps1_memory_card_1_png,
-      &size_ps1_memory_card_2_png, &size_memory_card_menu_png,
-      &size_file_explorer_png};
-  if (card < CARD_ART_VIRTUAL || card >= CARD_ART_COUNT || size <= 0)
-    return;
-
-  GSTEXTURE *texture = &cardArtTextures[card];
-  if (!cardArtAttempted[card]) {
-    cardArtAttempted[card] = 1;
-    texture->Delayed = 1;
-    if (gsKit_texture_png_mem(gsGlobal, texture, (void *)pngData[card],
-                              *pngSizes[card], 0, 0) == 0) {
-      // The main-menu artwork is displayed at 200 pixels. Keep its texture
-      // within 256 pixels to avoid spending a quarter of PS2 VRAM on mc.png.
-      if (texture->Width > 256 || texture->Height > 256) {
-        int sourceWidth = texture->Width;
-        int sourceHeight = texture->Height;
-        int width = sourceWidth > 256 ? 256 : sourceWidth;
-        int height = sourceHeight > 256 ? 256 : sourceHeight;
-        u32 *source = texture->Mem;
-        u32 *scaled = memalign(128, gsKit_texture_size(width, height,
-                                                       texture->PSM));
-        if (scaled == NULL) {
-          free(texture->Mem);
-          texture->Mem = NULL;
-          return;
-        }
-        for (int row = 0; row < height; row++)
-          for (int column = 0; column < width; column++)
-            scaled[row * width + column] =
-                source[(row * sourceHeight / height) * sourceWidth +
-                       column * sourceWidth / width];
-        free(texture->Mem);
-        texture->Mem = scaled;
-        texture->Width = width;
-        texture->Height = height;
-      }
-      texture->Filter = GS_FILTER_LINEAR;
-      bindTextureSafe(gsGlobal, texture);
-      cardArtLoaded[card] = 1;
-    } else {
-      free(texture->Mem);
-      texture->Mem = NULL;
-    }
-  }
-  if (!cardArtLoaded[card])
-    return;
-
-  if (!bindTextureSafe(gsGlobal, texture))
-    return;
-  gsKit_set_primalpha(gsGlobal, GS_BLEND_BACK2FRONT, 0);
-  gsKit_set_test(gsGlobal, GS_ATEST_OFF);
-  gsKit_prim_sprite_texture(gsGlobal, texture, x, y, 0, 0, x + size,
-                            y + size, texture->Width - 1,
-                            texture->Height - 1, 0,
-                            GS_SETREG_RGBA(0x80, 0x80, 0x80, 0x80));
   gsKit_set_test(gsGlobal, GS_ATEST_ON);
   gsKit_set_primalpha(gsGlobal, GS_SETREG_ALPHA(0, 1, 0, 1, 0), 0);
 }
@@ -769,7 +679,6 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
     return -1;
   FILE *file = fmemopen(buf, size, "rb");
   if (file == NULL) {
-    DPRINTF("ERROR: Failed to load PNG file\n");
     return -1;
   }
 
@@ -786,7 +695,6 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
   png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, (png_voidp)NULL, NULL, NULL);
 
   if (!png_ptr) {
-    DPRINTF("ERROR: Failed to init libpng read struct\n");
     fclose(file);
     return -1;
   }
@@ -794,14 +702,12 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
   info_ptr = png_create_info_struct(png_ptr);
 
   if (!info_ptr) {
-    DPRINTF("ERROR: Failed to init libpng info struct\n");
     fclose(file);
     png_destroy_read_struct(&png_ptr, (png_infopp)NULL, (png_infopp)NULL);
     return -1;
   }
 
   if (setjmp(png_jmpbuf(png_ptr))) {
-    DPRINTF("ERROR: Failed to decode PNG\n");
     free(row_pointers);
     free(pixelBuffer);
     png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
@@ -843,7 +749,6 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
   png_read_update_info(png_ptr, info_ptr);
 
   if (png_get_channels(png_ptr, info_ptr) != 4) {
-    DPRINTF("ERROR: PNG did not normalize to RGBA\n");
     png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
     fclose(file);
     return -1;
@@ -912,40 +817,28 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
   return 0;
 }
 
-static int loadPNGTextureRGBAInternal(GSGLOBAL *gsGlobal, GSTEXTURE *texture, const char *path, int upload,
-                                      uint32_t *readMs, uint32_t *decodeMs) {
-  uint32_t startMs = readMs != NULL ? uiNowMs() : 0;
-  if (readMs != NULL) *readMs = 0;
-  if (decodeMs != NULL) *decodeMs = 0;
+static int loadPNGTextureRGBAInternal(GSGLOBAL *gsGlobal, GSTEXTURE *texture, const char *path, int upload) {
   FILE *file = fopen(path, "rb");
   void *buffer;
   long fileSize;
   int result;
 
   if (file == NULL) {
-    if (readMs != NULL) *readMs = uiNowMs() - startMs;
-    DPRINTF("Failed to load PNG file: %s\n", path);
     return -1;
   }
   if (fseek(file, 0, SEEK_END) != 0 || (fileSize = ftell(file)) <= 0 || fseek(file, 0, SEEK_SET) != 0) {
-    if (readMs != NULL) *readMs = uiNowMs() - startMs;
-    DPRINTF("ERROR: Failed to size PNG file: %s\n", path);
     fclose(file);
     return -1;
   }
 
   buffer = malloc(fileSize);
   if (buffer == NULL || fread(buffer, 1, fileSize, file) != (size_t)fileSize) {
-    if (readMs != NULL) *readMs = uiNowMs() - startMs;
-    DPRINTF("ERROR: Failed to read PNG file: %s\n", path);
     free(buffer);
     fclose(file);
     return -1;
   }
   fclose(file);
 
-  if (readMs != NULL) *readMs = uiNowMs() - startMs;
-  startMs = decodeMs != NULL ? uiNowMs() : 0;
   result = gsKit_texture_png_mem(gsGlobal, texture, buffer, fileSize, 0, 0);
   if (result == 0 &&
       (fitTextureToVram(gsGlobal, texture) < 0 ||
@@ -954,32 +847,14 @@ static int loadPNGTextureRGBAInternal(GSGLOBAL *gsGlobal, GSTEXTURE *texture, co
     texture->Mem = NULL;
     result = -1;
   }
-  if (decodeMs != NULL) *decodeMs = uiNowMs() - startMs;
   free(buffer);
   return result;
 }
 
 int loadPNGTextureRGBA(GSGLOBAL *gsGlobal, GSTEXTURE *texture, const char *path) {
-  return loadPNGTextureRGBAInternal(gsGlobal, texture, path, 1, NULL, NULL);
-}
-
-int loadPNGTextureRGBAMemory(GSGLOBAL *gsGlobal, GSTEXTURE *texture,
-                             const unsigned char *data, size_t size) {
-  int result = gsKit_texture_png_mem(gsGlobal, texture, (void *)data, size, 0, 0);
-  if (result == 0 &&
-      (fitTextureToVram(gsGlobal, texture) < 0 || !bindTextureSafe(gsGlobal, texture))) {
-    free(texture->Mem);
-    texture->Mem = NULL;
-    result = -1;
-  }
-  return result;
+  return loadPNGTextureRGBAInternal(gsGlobal, texture, path, 1);
 }
 
 int decodePNGTextureRGBA(GSGLOBAL *gsGlobal, GSTEXTURE *texture, const char *path) {
-  return loadPNGTextureRGBAInternal(gsGlobal, texture, path, 0, NULL, NULL);
-}
-
-int decodePNGTextureRGBATimed(GSGLOBAL *gsGlobal, GSTEXTURE *texture, const char *path,
-                              uint32_t *readMs, uint32_t *decodeMs) {
-  return loadPNGTextureRGBAInternal(gsGlobal, texture, path, 0, readMs, decodeMs);
+  return loadPNGTextureRGBAInternal(gsGlobal, texture, path, 0);
 }

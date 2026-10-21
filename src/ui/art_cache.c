@@ -6,7 +6,6 @@
 #include "ui/navigation.h"
 #include "ui/collection_art.h"
 #include "ui/ui.h"
-#include "dprintf.h"
 
 #include <malloc.h>
 #include <gsToolkit.h>
@@ -41,11 +40,6 @@ static uint8_t collectionCoverResidentLevel[PSBBN_COVER_CACHE_COUNT];
 static char collectionCoverKeys[PSBBN_COVER_CACHE_COUNT][255];
 static CollectionArtReuseCache collectionReuseCache;
 static int collectionNavigationDirection;
-static struct {
-  uint32_t reportMs;
-  uint32_t completed, adopted, late, failed, cacheHits, pendingFocusFrames;
-  uint32_t readMs, decodeMs, featherMs, resizeMs, maxJobMs, bindMs, binds;
-} collectionArtStats;
 GSTEXTURE *gridCoverTextures[GRID_PAGE_BUFFERS][GRID_CACHE_PAGE_SIZE];
 uint8_t gridCoverLoaded[GRID_PAGE_BUFFERS][GRID_CACHE_PAGE_SIZE];
 static uint8_t gridCoverAttempted[GRID_PAGE_BUFFERS][GRID_CACHE_PAGE_SIZE];
@@ -114,7 +108,6 @@ typedef struct {
   int sourceWidth;
   int sourceHeight;
   int result;
-  uint32_t requestMs, readyMs, readMs, decodeMs, featherMs, resizeMs;
 } PSBBNArtJob;
 static PSBBNArtJob collectionArtJob;
 static int collectionFarArtThreadId = -1;
@@ -253,20 +246,13 @@ static struct {
   int resolved;
 } scrollCarouselCovers[ORBS_LOGO_CACHE_COUNT];
 static int scrollCarouselSlots[ORBS_LOGO_CACHE_COUNT];
-static GSTEXTURE scrollBackgroundTexture;
-static char scrollBackgroundPath[255];
-static char scrollBackgroundLoadedPath[255];
-static uint32_t scrollBackgroundDueMs;
-static int scrollBackgroundResolved;
-static int scrollBackgroundFast;
-enum { SCROLL_JOB_LOGO, SCROLL_JOB_BACKGROUND, SCROLL_JOB_COVER, SCROLL_JOB_CAROUSEL };
+enum { SCROLL_JOB_LOGO, SCROLL_JOB_COVER, SCROLL_JOB_CAROUSEL };
 static struct {
   volatile int state; // 0: idle, 1: decoding, 2: ready
   int kind;
   int targetIdx;
   uint32_t generation;
   char path[255];
-  char fallbackPath[255];
   GSTEXTURE texture;
   int result;
 } scrollArtJob;
@@ -803,10 +789,9 @@ static int fitScrollArtToVram(GSTEXTURE *texture, int kind) {
   // Preserve that detail for the focal cover; only previews need a second cap.
   if (kind == SCROLL_JOB_COVER)
     return 0;
-  const int background = kind == SCROLL_JOB_BACKGROUND;
-  const int maxWidth = background ? 512 : 256;
-  const int maxHeight = background ? 384 : 128;
-  const u32 reserve = background ? 256U * 1024U : 65536U;
+  const int maxWidth = 256;
+  const int maxHeight = 128;
+  const u32 reserve = 65536U;
   const u32 available = 4U * 1024U * 1024U - gsGlobal->CurrentPointer;
   int width = texture->Width;
   int height = texture->Height;
@@ -880,8 +865,6 @@ static int fitPSBBNCoverToBudget(GSTEXTURE *texture) {
       texture->Width, texture->Height, width, height);
   if (pixels == NULL)
     return -1;
-  DPRINTF("Collection art resized: %dx%d -> %dx%d (budget=%uKiB)\n",
-          texture->Width, texture->Height, width, height, (unsigned)(budget / 1024));
   free(texture->Mem);
   texture->Mem = (u32 *)pixels;
   texture->Width = width;
@@ -956,25 +939,18 @@ static int collectionCoverPath(TargetList *titles, int selectedTitleIdx, int cac
 
 static void decodePSBBNArtJob(PSBBNArtJob *job) {
   GSTEXTURE decoded = {0};
-  job->result = decodePNGTextureRGBATimed(gsGlobal, &decoded, job->path,
-                                         &job->readMs, &job->decodeMs);
-  uint32_t fitStartMs = uiNowMs();
+  job->result = decodePNGTextureRGBA(gsGlobal, &decoded, job->path);
   if (job->result == 0)
     job->result = fitPSBBNCoverToBudget(&decoded);
-  job->resizeMs = uiNowMs() - fitStartMs;
   if (job->result == 0 && decoded.Mem != NULL &&
       decoded.Width > 0 && decoded.Height > 0) {
-    uint32_t stageMs = uiNowMs();
     featherPSBBNCoverEdges(&decoded);
-    job->featherMs = uiNowMs() - stageMs;
-    stageMs = uiNowMs();
     PSBBNPixel *preview = createPSBBNThumbnail((const PSBBNPixel *)decoded.Mem,
                                                 decoded.Width, decoded.Height,
                                                 PSBBN_PREVIEW_SIZE);
     PSBBNPixel *thumbnail = preview != NULL ?
         createPSBBNThumbnail(preview, PSBBN_PREVIEW_SIZE, PSBBN_PREVIEW_SIZE,
                              PSBBN_THUMBNAIL_SIZE) : NULL;
-    job->resizeMs += uiNowMs() - stageMs;
     if (thumbnail != NULL && preview != NULL) {
       job->sourcePixels = decoded.Mem;
       job->previewPixels = preview;
@@ -1001,7 +977,6 @@ static void decodePSBBNArtJob(PSBBNArtJob *job) {
     free(decoded.Mem);
     free(decoded.Clut);
   }
-  job->readyMs = uiNowMs();
   __asm__ __volatile__("" ::: "memory");
   job->state = 2;
 }
@@ -1099,14 +1074,10 @@ void setCollectionArtForeground(int foreground) {
                                     COLLECTION_ART_BACKGROUND_PRIORITY;
   // Change existing threads too, so leaving Collection does not wait for a
   // foreground decode. A retiring second job finishes at background priority.
-  if (collectionArtThreadId >= 0 &&
-      ChangeThreadPriority(collectionArtThreadId, priority) < 0)
-    DPRINTF("WARN: Could not change Collection art priority\n");
-  if (collectionFarArtThreadId >= 0 &&
-      ChangeThreadPriority(collectionFarArtThreadId, priority) < 0)
-    DPRINTF("WARN: Could not change Collection far art priority\n");
-  DPRINTF("Collection scheduling: %s priority=0x%x worker_limit=%d\n",
-          foreground ? "foreground" : "background", priority, foreground ? 2 : 1);
+  if (collectionArtThreadId >= 0)
+    (void)ChangeThreadPriority(collectionArtThreadId, priority);
+  if (collectionFarArtThreadId >= 0)
+    (void)ChangeThreadPriority(collectionFarArtThreadId, priority);
 }
 
 static void startCollectionFarArtWorker(void) {
@@ -1219,7 +1190,6 @@ void releaseGridTexture(GSTEXTURE *texture) {
 void releaseOrbsArt(void) {
   scrollArtGeneration++;
   serviceScrollArt(); // Drop a completed result before its slots are released.
-  releaseScrollBackground();
   releaseGridTexture(&scrollCoverTexture);
   memset(&scrollCoverTexture, 0, sizeof(scrollCoverTexture));
   scrollCoverPath[0] = scrollCoverLoadedPath[0] = '\0';
@@ -1257,7 +1227,6 @@ static int queueScrollArt(Target *target, int targetIdx) {
     return -1;
   scrollArtJob.targetIdx = targetIdx;
   scrollArtJob.kind = SCROLL_JOB_LOGO;
-  scrollArtJob.fallbackPath[0] = '\0';
   scrollArtJob.generation = scrollArtGeneration;
   scrollArtJob.state = 1;
   SignalSema(scrollArtWakeSema);
@@ -1311,7 +1280,6 @@ void refreshScrollCover(Target *target, int fastScrolling, uint32_t now) {
   }
   scrollArtJob.kind = SCROLL_JOB_COVER;
   snprintf(scrollArtJob.path, sizeof(scrollArtJob.path), "%s", path);
-  scrollArtJob.fallbackPath[0] = '\0';
   scrollArtJob.generation = scrollArtGeneration;
   scrollArtJob.state = 1;
   SignalSema(scrollArtWakeSema);
@@ -1390,74 +1358,11 @@ void refreshScrollCarouselCovers(TargetList *titles, int selectedTitleIdx, int f
     }
     scrollArtJob.kind = SCROLL_JOB_CAROUSEL;
     snprintf(scrollArtJob.path, sizeof(scrollArtJob.path), "%s", scrollCarouselCovers[slot].path);
-    scrollArtJob.fallbackPath[0] = '\0';
     scrollArtJob.generation = scrollArtGeneration;
     scrollArtJob.state = 1;
     SignalSema(scrollArtWakeSema);
     break;
   }
-}
-
-void releaseScrollBackground(void) {
-  scrollArtGeneration++;
-  releaseGridTexture(&scrollBackgroundTexture);
-  memset(&scrollBackgroundTexture, 0, sizeof(scrollBackgroundTexture));
-  scrollBackgroundPath[0] = scrollBackgroundLoadedPath[0] = '\0';
-  scrollBackgroundResolved = 0;
-  scrollBackgroundFast = 0;
-}
-
-GSTEXTURE *getScrollBackgroundTexture(void) {
-  if (scrollBackgroundFast || scrollBackgroundTexture.Mem == NULL ||
-      strcmp(scrollBackgroundLoadedPath, scrollBackgroundPath))
-    return NULL;
-  return &scrollBackgroundTexture;
-}
-
-void refreshScrollBackground(Target *target, int fastScrolling, uint32_t now) {
-  char path[255];
-  struct DeviceMapEntry *device = target != NULL ? target->device : NULL;
-  if (device != NULL && device->metadev != NULL)
-    device = device->metadev;
-  if (device == NULL || device->mountpoint == NULL || target->id == NULL) {
-    if (scrollBackgroundPath[0] || scrollBackgroundTexture.Mem != NULL)
-      releaseScrollBackground();
-    return;
-  }
-  int length = snprintf(path, sizeof(path), "%s/ART/%s_BG.png",
-                        device->mountpoint, target->id);
-  if (length < 0 || length >= (int)sizeof(path)) {
-    if (scrollBackgroundPath[0] || scrollBackgroundTexture.Mem != NULL)
-      releaseScrollBackground();
-    return;
-  }
-  if (strcmp(path, scrollBackgroundPath)) {
-    snprintf(scrollBackgroundPath, sizeof(scrollBackgroundPath), "%s", path);
-    scrollBackgroundResolved = 0;
-    scrollBackgroundDueMs = now + 180;
-  }
-  scrollBackgroundFast = fastScrolling;
-  if (fastScrolling) {
-    scrollBackgroundDueMs = now + 180;
-    return;
-  }
-  if (scrollBackgroundResolved || !strcmp(path, scrollBackgroundLoadedPath) ||
-      (int32_t)(now - scrollBackgroundDueMs) < 0 || scrollArtJob.state != 0)
-    return;
-  if (scrollArtThreadId < 0) {
-    scrollBackgroundResolved = 1;
-    return;
-  }
-  // The same worker decodes logos and backgrounds; GS uploads stay on the UI.
-  scrollArtJob.kind = SCROLL_JOB_BACKGROUND;
-  snprintf(scrollArtJob.path, sizeof(scrollArtJob.path), "%s", path);
-  length = snprintf(scrollArtJob.fallbackPath, sizeof(scrollArtJob.fallbackPath),
-                    "%s%s/%s_BG.png", device->mountpoint, scrollArtPath, target->id);
-  if (length < 0 || length >= (int)sizeof(scrollArtJob.fallbackPath))
-    scrollArtJob.fallbackPath[0] = '\0';
-  scrollArtJob.generation = scrollArtGeneration;
-  scrollArtJob.state = 1;
-  SignalSema(scrollArtWakeSema);
 }
 
 static void loadOrbsLogo(TargetList *titles, int targetIdx, int cacheIdx) {
@@ -1554,15 +1459,6 @@ static void scrollArtWorker(void) {
     GSTEXTURE decoded = {0};
     decoded.Delayed = 1;
     scrollArtJob.result = decodePNGTextureRGBA(gsGlobal, &decoded, scrollArtJob.path);
-    if (scrollArtJob.result != 0 && scrollArtJob.kind == SCROLL_JOB_BACKGROUND &&
-        scrollArtJob.fallbackPath[0] != '\0') {
-      free(decoded.Mem);
-      free(decoded.Clut);
-      memset(&decoded, 0, sizeof(decoded));
-      decoded.Delayed = 1;
-      scrollArtJob.result = decodePNGTextureRGBA(gsGlobal, &decoded,
-                                                scrollArtJob.fallbackPath);
-    }
     if (scrollArtJob.result == 0 && decoded.Mem != NULL &&
         decoded.Width > 0 && decoded.Height > 0 &&
         fitScrollArtToVram(&decoded, scrollArtJob.kind) == 0) {
@@ -1637,20 +1533,6 @@ void serviceScrollArt(void) {
         }
         scrollCarouselCovers[i].resolved = 1;
         break;
-      }
-    } else if (scrollArtJob.kind == SCROLL_JOB_BACKGROUND) {
-      // A filtered-list index can refer to a different game; match its path.
-      if (!strcmp(scrollArtJob.path, scrollBackgroundPath)) {
-        releaseGridTexture(&scrollBackgroundTexture);
-        memset(&scrollBackgroundTexture, 0, sizeof(scrollBackgroundTexture));
-        scrollBackgroundLoadedPath[0] = '\0';
-        if (scrollArtJob.result == 0) {
-          scrollBackgroundTexture = scrollArtJob.texture;
-          memset(&scrollArtJob.texture, 0, sizeof(scrollArtJob.texture));
-          snprintf(scrollBackgroundLoadedPath, sizeof(scrollBackgroundLoadedPath),
-                    "%s", scrollArtJob.path);
-        }
-        scrollBackgroundResolved = 1;
       }
     } else {
       static const uint8_t priority[ORBS_LOGO_CACHE_COUNT] = {3, 2, 4, 1, 5, 0, 6};
@@ -1823,7 +1705,6 @@ static void startGridArtWorker(void) {
     gridArtStopping = 0;
     gridArtThreadId = CreateThread(&thread);
     if (gridArtThreadId >= 0 && StartThread(gridArtThreadId, NULL) >= 0) {
-      DPRINTF("3D art worker started\n");
       return;
     }
     if (gridArtThreadId >= 0)
@@ -1836,7 +1717,6 @@ static void startGridArtWorker(void) {
 }
 
 void pauseGridArtRequests(void) {
-  DPRINTF("3D art requests paused: decoder_busy=%d\n", !gridArtIsIdle());
   gridArtAccepting = 0;
 }
 
@@ -1901,7 +1781,6 @@ static void stopGridArtWorker(void) {
     WaitSema(gridArtDoneSema);
     deleteFinishedWorker(gridArtThreadId);
     gridArtThreadId = -1;
-    DPRINTF("3D art worker stopped before cache release\n");
   }
   if (gridArtWakeSema >= 0)
     DeleteSema(gridArtWakeSema);
@@ -2331,10 +2210,6 @@ void refreshOrbitCovers(TargetList *titles, int selectedTitleIdx, int previousTi
   refreshBackgroundCovers(titles, selectedTitleIdx, previousTitleIdx);
 }
 
-int collectionArtBackgroundAvailable(void) {
-  return collectionArtThreadId >= 0;
-}
-
 static void serviceBackgroundCovers(TargetList *titles, int selectedTitleIdx,
                                     PSBBNArtJob *job, uint32_t generation,
                                     int wakeSema, const uint8_t *priority,
@@ -2342,18 +2217,7 @@ static void serviceBackgroundCovers(TargetList *titles, int selectedTitleIdx,
                                     int requestCount) {
   char path[255];
   if (job->state == 2) {
-    int adopted = 0;
     __asm__ __volatile__("" ::: "memory");
-    if (job != &orbitArtJob) {
-      uint32_t jobMs = job->readyMs - job->requestMs;
-      collectionArtStats.completed++;
-      collectionArtStats.readMs += job->readMs;
-      collectionArtStats.decodeMs += job->decodeMs;
-      collectionArtStats.featherMs += job->featherMs;
-      collectionArtStats.resizeMs += job->resizeMs;
-      if (jobMs > collectionArtStats.maxJobMs) collectionArtStats.maxJobMs = jobMs;
-      if (job->result != 0) collectionArtStats.failed++;
-    }
     if (job->generation == generation) {
       for (int p = 0; p < PSBBN_COVER_CACHE_COUNT; p++) {
         int i = priority[p];
@@ -2379,13 +2243,8 @@ static void serviceBackgroundCovers(TargetList *titles, int selectedTitleIdx,
         }
         collectionCoverAttempted[i] = 1;
         collectionCoverResolved[i] = 1;
-        adopted = 1;
         break;
       }
-    }
-    if (job != &orbitArtJob) {
-      if (adopted) collectionArtStats.adopted++;
-      else if (job->result == 0) collectionArtStats.late++;
     }
     // A successful decode that left the window is still useful on a reversal
     // or list switch. Retain its complete artwork without touching worker memory.
@@ -2415,7 +2274,6 @@ static void serviceBackgroundCovers(TargetList *titles, int selectedTitleIdx,
     snprintf(job->path, sizeof(job->path), "%s", path);
     job->generation = generation;
     job->result = -1;
-    job->requestMs = uiNowMs();
     job->sourceWidth = job->sourceHeight = 0;
     job->state = 1;
     SignalSema(wakeSema);
@@ -2460,7 +2318,6 @@ static int serviceCollectionCoversInternal(TargetList *titles, int selectedTitle
       psbbnCoverSourceHeight[i] = pixels.height;
       strcpy(collectionCoverKeys[i], path);
       psbbnCoverLoaded[i] = collectionCoverAttempted[i] = collectionCoverResolved[i] = 1;
-      collectionArtStats.cacheHits++;
     }
     if (entering)
       entryCached = collectionCoversReady(titles, selectedTitleIdx);
@@ -2480,7 +2337,6 @@ static int serviceCollectionCoversInternal(TargetList *titles, int selectedTitle
                               collectionArtGeneration, collectionFarArtWakeSema,
                               urgent ? nearPriority : farPriority, &collectionArtJob,
                               collectionArtForeground, requestCount);
-    if (!collectionCoverResolved[nearPriority[0]]) collectionArtStats.pendingFocusFrames++;
   } else if (titles->total > 0) {
     // Preserve the seven-game entry gate if worker creation failed. Attempt
     // one cover per service call, then yield to the splash or library loop.
@@ -2493,21 +2349,6 @@ static int serviceCollectionCoversInternal(TargetList *titles, int selectedTitle
       collectionCoverAttempted[i] = collectionCoverResolved[i] = 1;
       break;
     }
-  }
-  uint32_t now = uiNowMs();
-  if (collectionArtStats.reportMs == 0) collectionArtStats.reportMs = now;
-  if ((uint32_t)(now - collectionArtStats.reportMs) >= 2000) {
-    if (collectionArtStats.completed || collectionArtStats.cacheHits || collectionArtStats.pendingFocusFrames)
-      DPRINTF("Collection art: jobs=%u adopted=%u late=%u failed=%u hits=%u pending_frames=%u "
-              "read=%ums png=%ums feather=%ums resize=%ums max_job=%ums bind=%ums/%u reuse=%uKiB\n",
-              collectionArtStats.completed, collectionArtStats.adopted, collectionArtStats.late,
-              collectionArtStats.failed, collectionArtStats.cacheHits, collectionArtStats.pendingFocusFrames,
-              collectionArtStats.readMs, collectionArtStats.decodeMs, collectionArtStats.featherMs,
-              collectionArtStats.resizeMs, collectionArtStats.maxJobMs,
-              collectionArtStats.bindMs, collectionArtStats.binds,
-              (unsigned)(collectionReuseCache.bytes / 1024));
-    memset(&collectionArtStats, 0, sizeof(collectionArtStats));
-    collectionArtStats.reportMs = now;
   }
   return entryCached;
 }
@@ -2525,10 +2366,6 @@ int serviceCollectionEntryCovers(TargetList *titles, int selectedTitleIdx) {
   return serviceCollectionCoversInternal(titles, selectedTitleIdx, 0, 0, 0, 1);
 }
 
-void recordCollectionCoverBind(uint32_t elapsedMs) {
-  collectionArtStats.bindMs += elapsedMs;
-  collectionArtStats.binds++;
-}
 
 void serviceOrbitCovers(TargetList *titles, int selectedTitleIdx) {
   static const uint8_t priority[PSBBN_COVER_CACHE_COUNT] = {3, 4, 2, 5, 1, 6, 7, 8, 9, 0};
@@ -2730,7 +2567,6 @@ void artCacheShutdown(void) {
   releaseOrbsArt();
   collectionArtReuseClear(&collectionReuseCache);
   memset(collectionCoverKeys, 0, sizeof(collectionCoverKeys));
-  memset(&collectionArtStats, 0, sizeof(collectionArtStats));
   collectionNavigationDirection = 0;
   for (int i = 0; i < ORBS_LOGO_CACHE_COUNT; i++) {
     if (orbsLogoTextures[i] != NULL) {

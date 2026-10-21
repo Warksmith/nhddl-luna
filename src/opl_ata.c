@@ -7,7 +7,6 @@
 #include "opl_vmc.h"
 #include "common.h"
 #include "devices/devices.h"
-#include "dprintf.h"
 #include "ui/ambient.h"
 #include "ui/game_options.h"
 #include "opl_gsm_presets.h"
@@ -122,7 +121,6 @@ static int loadPayloads(const LunaOplDevice *device) {
       return -ENAMETOOLONG;
     FILE *file = fopen(path, "rb");
     if (file == NULL) {
-      DPRINTF("OPL: missing %s\n", path);
       return -ENOENT;
     }
     if (fseek(file, 0, SEEK_END) ||
@@ -208,7 +206,6 @@ static int prepareDisc(Target *target, uint8_t compat, const LunaOplDevice *devi
                                 sizeof(settings->frags));
     if (fragments <= 0 || fragments > OPL_ATA_MAX_FRAGS) {
       close(fd);
-      DPRINTF("OPL: invalid ISO fragment count: %d\n", fragments);
       return -EFBIG;
     }
     char driver[8] = {0};
@@ -275,8 +272,6 @@ static int prepareDisc(Target *target, uint8_t compat, const LunaOplDevice *devi
   } else {
     settings->hddIsLBA48 = 0;
   }
-  DPRINTF("OPL: %s, %d fragments, device %u, LBA48 %u\n", target->id,
-          fragments, target->device->index, settings->hddIsLBA48);
   return 0;
 }
 
@@ -503,7 +498,6 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
     if (activeCards < 0) result = activeCards;
   }
   if (result) {
-    DPRINTF("OPL: launch preflight failed: %d\n", result);
     freePayloads();
     return result;
   }
@@ -517,8 +511,7 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
 
   if (progress)
     progress(LAUNCH_STAGE_SYNCING, userdata);
-  if (updateLastLaunchedTitle(target->device, target->fullPath))
-    DPRINTF("OPL: failed to save last launched title\n");
+  (void)updateLastLaunchedTitle(target->device, target->fullPath);
   if (target->device->sync)
     target->device->sync();
 
@@ -572,8 +565,7 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
   if (target->device->mode == MODE_UDPFS)
     strlcpy(config->g_ps2_ip, LAUNCHER_OPTIONS.udpfsIp[0] ?
             LAUNCHER_OPTIONS.udpfsIp : "192.168.1.10", sizeof(config->g_ps2_ip));
-  Argument *debug = getArgument(arguments, "dbc");
-  config->EnableDebug = debug != NULL && !debug->isDisabled;
+  config->EnableDebug = 0;
   // The HDD return target uses the console's browser boot chain, which
   // routes the held START button back into LUNA. Other configured targets
   // are launcher ELFs that OPL can load directly after IGR.
@@ -583,12 +575,10 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
   else if (strlen(returnPath) < sizeof(config->ExitPath))
     strcpy(config->ExitPath, returnPath);
   else {
-    DPRINTF("OPL: return path exceeds core limit\n");
     free(ioprp);
     freePayloads();
     return -ENAMETOOLONG;
   }
-  DPRINTF("OPL: IGR return target %s\n", config->ExitPath);
   strlcpy(config->GameID, target->id, sizeof(config->GameID));
   // Leave controller IGR configurable, but always hand a physical power press
   // to CDVDMAN's IOP shutdown thread, even before a game opens its pad.
@@ -604,7 +594,6 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
   result = patchKernel((void *)elf->entry, storageEnd,
                        &config->eeloadCopy, &config->initUserMemory);
   if (result) {
-    DPRINTF("OPL: unsupported kernel; handoff cancelled\n");
     free(ioprp);
     freePayloads();
     return result;
@@ -645,12 +634,10 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
   argv[argc++] = bootPath;
   if (progress)
     progress(LAUNCH_STAGE_STARTING, userdata);
-  DPRINTF("OPL: starting EE core at %08x with %s\n", elf->entry, bootPath);
   FlushCache(WRITEBACK_DCACHE);
   FlushCache(INVALIDATE_ICACHE);
   fileXioExit();
   SifExitRpc();
   ExecPS2((void *)elf->entry, NULL, argc, argv);
-  DPRINTF("OPL: ExecPS2 returned after handoff\n");
   __builtin_trap();
 }

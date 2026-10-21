@@ -1,7 +1,6 @@
 // Implements support for APA-formatted HDD with HDL partitions
 #include "common.h"
 #include "devices/devices.h"
-#include "dprintf.h"
 #include "ui/ui.h"
 #include <hdd-ioctl.h>
 #include <stdio.h>
@@ -119,7 +118,6 @@ struct DeviceMapEntry *createMetadataEntry(char *partitionPath) {
     dev->mountpoint = strdup(PFS_MOUNTPOINT);
   if (!dev->mountpoint) { free(dev); return NULL; }
 
-  DPRINTF("Using %s for HDL metadata\n", dev->mountpoint);
 
   return dev;
 }
@@ -135,10 +133,7 @@ struct DeviceMapEntry *mountPFS() {
   // Try to read OPL config and get a partition name
   char *oplPartition = readOPLConfig();
   if (oplPartition) {
-    if (fileXioMount(PFS_MOUNTPOINT, oplPartition, FIO_MT_RDWR))
-      DPRINTF("WARN: failed to mount %s, will try to use fallbacks\n", oplPartition);
-    else {
-      DPRINTF("Mounted %s as pfs0:\n", oplPartition);
+    if (!fileXioMount(PFS_MOUNTPOINT, oplPartition, FIO_MT_RDWR)) {
       snprintf(mountedPFSPartition, sizeof(mountedPFSPartition), "%s", oplPartition);
       struct DeviceMapEntry *dev = createMetadataEntry(oplPartition);
       free(oplPartition);
@@ -153,7 +148,6 @@ struct DeviceMapEntry *mountPFS() {
       continue;
     }
 
-    DPRINTF("Mounted %s as pfs0:\n", pfsPartitions[i]);
     snprintf(mountedPFSPartition, sizeof(mountedPFSPartition), "%s", pfsPartitions[i]);
     return createMetadataEntry(pfsPartitions[i]);
   }
@@ -191,7 +185,6 @@ int initHDL(int deviceIdx) {
   // Make sure hdd0: is an APA-formatted drive
   int apaResult = checkAPAHeader();
   if (apaResult) {
-    DPRINTF("ERROR: failed to find APA partition table on hdd0\n");
     return apaResult < 0 ? apaResult : -ENODEV;
   }
 
@@ -207,11 +200,9 @@ int initHDL(int deviceIdx) {
   // Mount metadata partition
   deviceModeMap[deviceIdx].metadev = mountPFS();
   if (!deviceModeMap[deviceIdx].metadev) {
-    DPRINTF("Failed to mount PFS partition\n");
     return -ENODEV;
   }
 
-  uiSplashLogString(LEVEL_INFO_NODELAY, "Found device %s\n", mountpoint);
 
   return 1;
 }
@@ -260,7 +251,6 @@ static Target *scanPartition(char *deviceMountpoint, char *partitionName,
   args->lba = lba;
   args->size = nsectors;
   if (fileXioDevctl(deviceMountpoint, HDIOC_READSECTOR, args, sizeof(hddAtaTransfer_t), &header, nsectors * 512) != 0) {
-    DPRINTF("ERROR: failed to read sector\n");
     *error = -EIO;
     return NULL;
   }
@@ -269,7 +259,6 @@ static Target *scanPartition(char *deviceMountpoint, char *partitionName,
       !memchr(header.gamename, '\0', sizeof(header.gamename)) ||
       !memchr(header.startup, '\0', sizeof(header.startup)) ||
       !header.gamename[0] || !header.startup[0]) {
-    DPRINTF("ERROR: invalid HDL checksum (0x%X)\n", header.checksum);
     return NULL;
   }
 
@@ -298,7 +287,6 @@ int findHDLTargets(TargetList *result, struct DeviceMapEntry *device) {
   // Open the drive
   int fd = fileXioDopen(device->mountpoint);
   if (fd < 0) {
-    DPRINTF("ERROR: failed to open %s for scanning: %d\n", device->mountpoint, fd);
     return -ENODEV;
   }
 
