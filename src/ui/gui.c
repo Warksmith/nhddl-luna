@@ -1505,11 +1505,9 @@ static void drawPsxDiscSwapMessage(const Target *target,int startDisc) {
   gsKit_TexManager_nextFrame(gsGlobal);
   gsKit_set_test(gsGlobal,GS_ZTEST_OFF);
   drawSharedLibraryBackground(uiNowMs());
-  // Keep moving wallpaper outside an opaque, high-contrast reading surface.
-  gsGlobal->PrimAlphaEnable=GS_SETTING_OFF;
-  gsKit_prim_sprite(gsGlobal,panelLeft,panelTop,panelRight,panelBottom,0,ColorPanelEdge);
-  gsKit_prim_sprite(gsGlobal,panelLeft+1,panelTop+1,panelRight-1,panelBottom-1,0,ColorBlack);
+  // Use the selected glass tint with a dense fill for readable swap instructions.
   gsGlobal->PrimAlphaEnable=GS_SETTING_ON;
+  drawGlassPanelWithFillAlpha(panelLeft,panelTop,panelRight,panelBottom,0,0x78);
   snprintf(text,sizeof(text),"%s %d",lunaText("Start disc"),startDisc+1);
   drawPsxSwapHeading(left,top,right,1.3f,text);
   top+=line+2;
@@ -1525,7 +1523,8 @@ static void drawPsxDiscSwapMessage(const Target *target,int startDisc) {
     if(i==2) {
       // A labeled button silhouette stays recognizable at television resolution.
       gsKit_prim_sprite(gsGlobal,x,top+5,x+width,top+34,0,ColorSelectedText);
-      gsKit_prim_sprite(gsGlobal,x+2,top+7,x+width-2,top+32,0,ColorPanel);
+      gsKit_prim_sprite(gsGlobal,x+2,top+7,x+width-2,top+32,0,
+        glassPresetColor(0x0A,0x14,0x2A,0x80));
       drawTextWindow(x+4,top+5,x+width-4,top+34,0,ColorSelectedText,ALIGN_CENTER,"SELECT");
     } else drawIconScaled(x,top,0,ColorSelectedText,chord[i],1.5f);
     x+=width;
@@ -1543,7 +1542,8 @@ static void drawPsxDiscSwapMessage(const Target *target,int startDisc) {
     int slotLeft=(i%2)?middle:left,slotRight=(i%2)?right:middle;
     int x=slotLeft+12;
     int y=top+(int)(i/2)*(line+6);
-    gsKit_prim_sprite(gsGlobal,slotLeft+3,y,slotRight-3,y+line,0,ColorPanel);
+    gsKit_prim_sprite(gsGlobal,slotLeft+3,y,slotRight-3,y+line,0,
+      glassPresetColor(0x0A,0x14,0x2A,0x60));
     drawPsxDiscDirection(x,y+(line-26)/2,i);
     drawTextLineScaled(x+38,y+(line-(int)(getFontLineHeight()*1.15f))/2,
       slotRight-10,0,1.15f,ColorSelectedText,text);
