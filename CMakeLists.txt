@@ -131,8 +131,8 @@ endif()
 
 if(LUNA_EMULATOR_BUILD)
   add_definitions(-DLUNA_EMULATOR_BUILD)
-  configure_file(${CMAKE_CURRENT_SOURCE_DIR}/assets/ambient.wav
-                 ${CMAKE_CURRENT_BINARY_DIR}/ambient.wav COPYONLY)
+  configure_file(${CMAKE_CURRENT_SOURCE_DIR}/assets/ambient.adp
+                 ${CMAKE_CURRENT_BINARY_DIR}/ambient.adp COPYONLY)
 endif()
 
 # Create the main executable
@@ -180,7 +180,7 @@ target_link_libraries(${EE_BIN}
     z
     m
     tiff
-    audsrv
+    ps2snd
 )
 
 # Set link flags for PS2

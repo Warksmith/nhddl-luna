@@ -1,376 +1,197 @@
 #include "ui/ambient.h"
-#include "ui/worker_lifecycle.h"
 #include "common.h"
 #include "dprintf.h"
-#include <audsrv.h>
-#include <delaythread.h>
 #include <kernel.h>
 #include <loadfile.h>
+#include <ps2snd.h>
+#include <sifrpc.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
-#define AMBIENT_BLOCK_BYTES 1024
-#define AMBIENT_BLOCK_FRAMES 1017
-#define AMBIENT_FEED_BYTES 1024
-#define AMBIENT_CACHE_LIMIT (2 * 1024 * 1024)
-#define AMBIENT_VOLUME 100
+#define AMBIENT_SPU_BASE 0x10000U
+#define AMBIENT_SPU_LIMIT 0x1c0000U
+#define AMBIENT_UPLOAD_BYTES 16384U
+#define AMBIENT_CORE 1
+#define AMBIENT_VOICES 3U
+#define AMBIENT_VOLUME 0x3fff
 
-extern unsigned char audsrv_irx[] __attribute__((aligned(16)));
-extern uint32_t size_audsrv_irx;
-extern void *_gp;
+extern unsigned char ps2snd_irx[] __attribute__((aligned(16)));
+extern uint32_t size_ps2snd_irx;
 
-static const int imaIndexChange[16] = {
-    -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8};
-static const int imaStep[89] = {
-    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31,
-    34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
-    130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371,
-    408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060,
-    1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499,
-    2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894,
-    6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
-    15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767};
-
-typedef struct {
-  int predictor;
-  int index;
-} ImaChannel;
-
-static FILE *ambientFile;
-static uint8_t *ambientData;
-static long dataOffset;
-static uint32_t dataBytes;
-static uint32_t totalFrames;
-static volatile int enabled;
-static volatile int stopping;
-static int threadId = -1;
-static int controlSema = -1;
-static int doneSema = -1;
-static int audioInitialized;
 static int audioDriversLoaded;
-void ambientForgetDrivers(void) { audioDriversLoaded = 0; }
-static uint8_t threadStack[8192] __attribute__((aligned(16)));
-static uint8_t encodedBlock[AMBIENT_BLOCK_BYTES] __attribute__((aligned(16)));
-static int16_t decodedBlock[AMBIENT_BLOCK_FRAMES * 2] __attribute__((aligned(16)));
+static int audioInitialized;
+static int enabled;
+static uint32_t channelBytes;
+static uint32_t sampleFrames;
+static uint8_t uploadBuffer[AMBIENT_UPLOAD_BYTES] __attribute__((aligned(64)));
 
-static uint16_t read16(const uint8_t *bytes) {
-  return (uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8);
+static uint16_t read16(const uint8_t *p) {
+  return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
 
-static uint32_t read32(const uint8_t *bytes) {
-  return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
-         ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+static uint32_t read32(const uint8_t *p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+         ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-static int inspectWave(FILE *file) {
-  uint8_t header[20];
-  int validFormat = 0;
-  int hasData = 0;
-  totalFrames = 0;
-  dataBytes = 0;
-  if (fread(header, 1, 12, file) != 12 || memcmp(header, "RIFF", 4) ||
-      memcmp(header + 8, "WAVE", 4))
+static int inspectAudio(FILE *file) {
+  uint8_t header[32];
+  if (fread(header, 1, sizeof(header), file) != sizeof(header) ||
+      memcmp(header, "LADP", 4) || read16(header + 4) != 1 ||
+      read16(header + 6) != 2 || read32(header + 8) != 48000 ||
+      read32(header + 20) || read32(header + 24) || read32(header + 28))
     return -1;
-
-  while (fread(header, 1, 8, file) == 8) {
-    uint32_t chunkSize = read32(header + 4);
-    long next = ftell(file) + (long)chunkSize + (chunkSize & 1);
-    if (!memcmp(header, "fmt ", 4) && chunkSize >= 20) {
-      if (fread(header, 1, 20, file) != 20)
-        return -1;
-      validFormat = read16(header) == 0x11 && read16(header + 2) == 2 &&
-                    read32(header + 4) == 22050 &&
-                    read16(header + 12) == AMBIENT_BLOCK_BYTES &&
-                    read16(header + 14) == 4 &&
-                    read16(header + 18) == AMBIENT_BLOCK_FRAMES;
-    } else if (!memcmp(header, "fact", 4) && chunkSize >= 4) {
-      if (fread(header, 1, 4, file) != 4)
-        return -1;
-      totalFrames = read32(header);
-    } else if (!memcmp(header, "data", 4)) {
-      dataOffset = ftell(file);
-      dataBytes = chunkSize;
-      hasData = chunkSize >= AMBIENT_BLOCK_BYTES &&
-                chunkSize % AMBIENT_BLOCK_BYTES == 0;
-      break;
-    }
-    if (fseek(file, next, SEEK_SET))
-      return -1;
-  }
-  return validFormat && hasData && totalFrames > 0 &&
-                 totalFrames <=
-                     (dataBytes / AMBIENT_BLOCK_BYTES) * AMBIENT_BLOCK_FRAMES
-             ? 0
-             : -1;
+  sampleFrames = read32(header + 12);
+  channelBytes = read32(header + 16);
+  if (channelBytes < 64 || (channelBytes & 63) ||
+      channelBytes > (AMBIENT_SPU_LIMIT - AMBIENT_SPU_BASE) / 2 ||
+      sampleFrames < 56 || sampleFrames % 28 ||
+      sampleFrames > (channelBytes / 16) * 28 ||
+      ((sampleFrames / 28 * 16 + 63) & ~63U) != channelBytes)
+    return -1;
+  if (fseek(file, 0, SEEK_END) ||
+      ftell(file) != (long)(sizeof(header) + channelBytes * 2) ||
+      fseek(file, sizeof(header), SEEK_SET))
+    return -1;
+  return 0;
 }
 
-static int16_t decodeNibble(ImaChannel *channel, int nibble) {
-  int step = imaStep[channel->index];
-  int difference = step >> 3;
-  if (nibble & 1) difference += step >> 2;
-  if (nibble & 2) difference += step >> 1;
-  if (nibble & 4) difference += step;
-  channel->predictor += (nibble & 8) ? -difference : difference;
-  if (channel->predictor > 32767) channel->predictor = 32767;
-  if (channel->predictor < -32768) channel->predictor = -32768;
-  channel->index += imaIndexChange[nibble];
-  if (channel->index < 0) channel->index = 0;
-  if (channel->index > 88) channel->index = 88;
-  return (int16_t)channel->predictor;
+static void silenceAudio(void) {
+  sceSdSetParam(SD_VOICE(AMBIENT_CORE, 0) | SD_VPARAM_VOLL, 0);
+  sceSdSetParam(SD_VOICE(AMBIENT_CORE, 1) | SD_VPARAM_VOLR, 0);
+  sceSdSetSwitch(AMBIENT_CORE | SD_SWITCH_KOFF, AMBIENT_VOICES);
+  enabled = 0;
 }
 
-static int decodeBlock(void) {
-  ImaChannel channels[2];
-  for (int channel = 0; channel < 2; channel++) {
-    int offset = channel * 4;
-    channels[channel].predictor = (int16_t)read16(encodedBlock + offset);
-    channels[channel].index = encodedBlock[offset + 2];
-    if (channels[channel].index > 88)
-      return -1;
-    decodedBlock[channel] = (int16_t)channels[channel].predictor;
-  }
-  for (int group = 0; group < 127; group++) {
-    for (int channel = 0; channel < 2; channel++) {
-      int offset = 8 + group * 8 + channel * 4;
-      for (int byte = 0; byte < 4; byte++) {
-        int sample = 1 + group * 8 + byte * 2;
-        uint8_t packed = encodedBlock[offset + byte];
-        decodedBlock[sample * 2 + channel] =
-            decodeNibble(&channels[channel], packed & 0x0f);
-        decodedBlock[(sample + 1) * 2 + channel] =
-            decodeNibble(&channels[channel], packed >> 4);
-      }
+static int uploadChannel(FILE *file, int channel) {
+  uint32_t blocks = sampleFrames / 28;
+  for (uint32_t offset = 0; offset < channelBytes;) {
+    uint32_t count = channelBytes - offset;
+    if (count > sizeof(uploadBuffer)) count = sizeof(uploadBuffer);
+    if (fread(uploadBuffer, 1, count, file) != count) return -1;
+    for (uint32_t i = 0; i < count; i += 16) {
+      uint32_t block = (offset + i) / 16;
+      if (block >= blocks) continue;
+      uint8_t flags = block == 0 ? 6 : block == blocks - 1 ? 3 : 2;
+      if ((uploadBuffer[i] >> 4) > 4 || (uploadBuffer[i] & 15) > 12 ||
+          uploadBuffer[i + 1] != flags ||
+          (block == 0 && (uploadBuffer[i] >> 4) != 0))
+        return -1;
     }
+    // Only temporary EE/IOP buffers; the complete track lives in SPU2 RAM.
+    if (sndLoadSample(uploadBuffer,
+                      AMBIENT_SPU_BASE + channel * channelBytes + offset,
+                      count) != (int)count)
+      return -1;
+    offset += count;
   }
   return 0;
 }
 
-static void audioThread(void) {
-  int streamStarted = 0;
-  unsigned int blocksPlayed = 0;
-  int stalledReported = 0;
-  int resetQueue = 0;
-  while (!stopping) {
-    if (!enabled) {
-      audsrv_stop_audio();
-      resetQueue = 1;
-      WaitSema(controlSema);
-      continue;
-    }
-
-    if (ambientData == NULL && fseek(ambientFile, dataOffset, SEEK_SET))
-      break;
-    uint32_t framesLeft = totalFrames;
-    uint32_t blockIndex = 0;
-    if (resetQueue) {
-      audsrv_fmt_t format = {.freq = 22050, .bits = 16, .channels = 2};
-      if (audsrv_set_format(&format)) {
-        DPRINTF("WARN: Ambient audio queue could not be reset\n");
-        break;
-      }
-      resetQueue = 0;
-    }
-    if (audsrv_set_volume(AMBIENT_VOLUME)) {
-      DPRINTF("WARN: Ambient audio output could not be configured\n");
-      break;
-    }
-    while (!stopping && enabled && framesLeft > 0) {
-      if (ambientData != NULL)
-        memcpy(encodedBlock, ambientData + blockIndex * AMBIENT_BLOCK_BYTES,
-               sizeof(encodedBlock));
-      else if (fread(encodedBlock, 1, sizeof(encodedBlock), ambientFile) !=
-               sizeof(encodedBlock)) {
-        DPRINTF("WARN: Ambient audio stream could not be read\n");
-        enabled = 0;
-        break;
-      }
-      blockIndex++;
-      if (decodeBlock()) {
-        DPRINTF("WARN: Ambient audio stream could not be decoded\n");
-        enabled = 0;
-        break;
-      }
-      int frames = framesLeft < AMBIENT_BLOCK_FRAMES
-                       ? (int)framesLeft : AMBIENT_BLOCK_FRAMES;
-      int bytes = frames * 2 * sizeof(int16_t);
-      int sent = 0;
-      int waitCycles = 0;
-      while (!stopping && enabled && sent < bytes) {
-        int amount = bytes - sent;
-        if (amount > AMBIENT_FEED_BYTES)
-          amount = AMBIENT_FEED_BYTES;
-        int available = audsrv_available();
-        if (available < 0) {
-          DPRINTF("WARN: Ambient audio queue is unavailable\n");
-          enabled = 0;
-          break;
-        }
-        if (available < amount) {
-          if (++waitCycles == 200 && !stalledReported) {
-            DPRINTF("WARN: Ambient audio queue stalled with %d bytes free\n",
-                    available);
-            stalledReported = 1;
-          }
-          DelayThread(5000);
-          continue;
-        }
-        int count = audsrv_play_audio((char *)decodedBlock + sent, amount);
-        if (count < 0) {
-          DPRINTF("WARN: Ambient audio playback stopped\n");
-          enabled = 0;
-          break;
-        }
-        if (count == 0) {
-          DelayThread(5000);
-          continue;
-        }
-        sent += count;
-        waitCycles = 0;
-      }
-      if (!streamStarted && sent == bytes) {
-        DPRINTF("Ambient audio streaming\n");
-        streamStarted = 1;
-      }
-      if (sent == bytes && ++blocksPlayed == 32)
-        DPRINTF("Ambient audio stream sustained for 32 blocks\n");
-      framesLeft -= frames;
-    }
+static void startVoices(void) {
+  for (int channel = 0; channel < 2; channel++) {
+    uint16_t voice = SD_VOICE(AMBIENT_CORE, channel);
+    uint32_t address = AMBIENT_SPU_BASE + channel * channelBytes;
+    sceSdSetAddr(voice | SD_VADDR_SSA, address);
+    sceSdSetAddr(voice | SD_VADDR_LSAX, address);
+    sceSdSetParam(voice | SD_VPARAM_VOLL, channel == 0 ? AMBIENT_VOLUME : 0);
+    sceSdSetParam(voice | SD_VPARAM_VOLR, channel == 1 ? AMBIENT_VOLUME : 0);
+    sceSdSetParam(voice | SD_VPARAM_PITCH, 0x1000);
+    sceSdSetParam(voice | SD_VPARAM_ADSR1,
+                  SD_SET_ADSR1(SD_ADSR_AR_LINEARi, 0x10, 0, 15));
+    sceSdSetParam(voice | SD_VPARAM_ADSR2,
+                  SD_SET_ADSR2(SD_ADSR_SR_LINEARi, 0x7f, SD_ADSR_RR_LINEARd, 0));
   }
-  audsrv_stop_audio();
-  SignalSema(doneSema);
-  ExitThread();
+  // One key-on starts both channels on the same sound-hardware tick.
+  sceSdSetSwitch(AMBIENT_CORE | SD_SWITCH_KON, AMBIENT_VOICES);
+  enabled = 1;
+}
+
+void ambientForgetDrivers(void) {
+  audioDriversLoaded = 0;
+  audioInitialized = 0;
+  enabled = 0;
 }
 
 void ambientStart(int shouldPlay) {
   char path[PATH_MAX];
-  ee_sema_t semaphore;
-  ee_thread_t thread;
-  ee_thread_status_t callerStatus;
   int iopResult;
-  if (threadId >= 0)
+  if (audioInitialized) {
+    ambientSetEnabled(shouldPlay);
     return;
-  if (ReferThreadStatus(GetThreadId(), &callerStatus) >= 0)
-    DPRINTF("Ambient caller priority %d\n", callerStatus.current_priority);
+  }
+  if (!shouldPlay) return;
 #ifdef LUNA_EMULATOR_BUILD
-  strcpy(path, "host:/ambient.wav");
+  strcpy(path, "host:/ambient.adp");
+#else
+  snprintf(path, sizeof(path), "mc%c:/APP_LUNA/ambient.adp",
+           !strncmp(LAUNCHER_OPTIONS.returnPath, "mc1:", 4) ? '1' : '0');
 #endif
-#ifndef LUNA_EMULATOR_BUILD
-  snprintf(path, sizeof(path), "mc%c:/APP_LUNA/ambient.wav",
-           (!strncmp(LAUNCHER_OPTIONS.returnPath, "mc1:", 4)) ? '1' : '0');
-#endif
-  ambientFile = fopen(path, "rb");
-  if (ambientFile == NULL) {
+  FILE *file = fopen(path, "rb");
+  if (file == NULL) {
     DPRINTF("WARN: Ambient audio file is missing\n");
     return;
   }
-  if (inspectWave(ambientFile)) {
+  if (inspectAudio(file)) {
     DPRINTF("WARN: Ambient audio file has an unsupported format\n");
-    fclose(ambientFile);
-    ambientFile = NULL;
+    fclose(file);
     return;
-  }
-  if (dataBytes <= AMBIENT_CACHE_LIMIT) {
-    ambientData = malloc(dataBytes);
-    if (ambientData != NULL && !fseek(ambientFile, dataOffset, SEEK_SET) &&
-        fread(ambientData, 1, dataBytes, ambientFile) == dataBytes) {
-      fclose(ambientFile);
-      ambientFile = NULL;
-      DPRINTF("Ambient audio cached in EE memory (%u bytes)\n", dataBytes);
-    } else {
-      free(ambientData);
-      ambientData = NULL;
-      DPRINTF("WARN: Ambient audio cache unavailable; streaming from storage\n");
-    }
   }
   if (!audioDriversLoaded) {
     if (SifLoadModule("rom0:LIBSD", 0, NULL) < 0 ||
-        SifExecModuleBuffer(audsrv_irx, size_audsrv_irx, 0, NULL, &iopResult) < 0 || iopResult < 0)
+        SifExecModuleBuffer(ps2snd_irx, size_ps2snd_irx, 0, NULL,
+                            &iopResult) < 0 || iopResult < 0)
       goto fail;
     audioDriversLoaded = 1;
   }
-  if (audsrv_init()) {
-    DPRINTF("WARN: Could not initialize ambient audio\n");
-    goto fail;
+  // Probe with a deadline before the SDK's blocking RPC initializer.
+  SifRpcClientData_t probe __attribute__((aligned(64)));
+  memset(&probe, 0, sizeof(probe));
+  for (int tries = 0; probe.server == NULL && tries < 100; tries++) {
+    if (SifBindRpc(&probe, BINDID_PS2SND, 0) < 0) goto fail;
+    if (probe.server == NULL) usleep(1000);
   }
+  if (probe.server == NULL || sceSdInit(0) < 0) goto fail;
   audioInitialized = 1;
-  audsrv_fmt_t format = {.freq = 22050, .bits = 16, .channels = 2};
-  if (audsrv_set_format(&format))
-    goto fail;
-  semaphore.init_count = 0;
-  semaphore.max_count = 1;
-  semaphore.option = 0;
-  controlSema = CreateSema(&semaphore);
-  doneSema = CreateSema(&semaphore);
-  if (controlSema < 0 || doneSema < 0)
-    goto fail;
-  memset(&thread, 0, sizeof(thread));
-  thread.func = audioThread;
-  thread.stack = threadStack;
-  thread.stack_size = sizeof(threadStack);
-  thread.gp_reg = &_gp;
-  // Keep ambient audio below artwork (0x1f) and the UI (0x20).
-  thread.initial_priority = 0x21;
-  enabled = shouldPlay != 0;
-  stopping = 0;
-  threadId = CreateThread(&thread);
-  if (threadId < 0)
-    goto fail;
-  if (StartThread(threadId, NULL) < 0) {
-    DeleteThread(threadId);
-    threadId = -1;
-    goto fail;
-  }
-  DPRINTF("Ambient audio initialized from %s\n", path);
+  silenceAudio();
+  sceSdSetCoreAttr(AMBIENT_CORE | SD_CORE_EFFECT_ENABLE, 0);
+  sceSdSetSwitch(AMBIENT_CORE | SD_SWITCH_PMON, 0);
+  sceSdSetSwitch(AMBIENT_CORE | SD_SWITCH_NON, 0);
+  sceSdSetSwitch(AMBIENT_CORE | SD_SWITCH_VMIXL, AMBIENT_VOICES);
+  sceSdSetSwitch(AMBIENT_CORE | SD_SWITCH_VMIXR, AMBIENT_VOICES);
+  sceSdSetSwitch(AMBIENT_CORE | SD_SWITCH_VMIXEL, 0);
+  sceSdSetSwitch(AMBIENT_CORE | SD_SWITCH_VMIXER, 0);
+  sceSdSetParam(AMBIENT_CORE | SD_PARAM_MVOLL, 0x3fff);
+  sceSdSetParam(AMBIENT_CORE | SD_PARAM_MVOLR, 0x3fff);
+  if (uploadChannel(file, 0) || uploadChannel(file, 1)) goto fail;
+  fclose(file);
+  startVoices();
+  DPRINTF("Ambient native ADPCM: %u frames at 48000 Hz, %u bytes in SPU2; hardware loop\n",
+          sampleFrames, channelBytes * 2);
   return;
-
 fail:
-  DPRINTF("WARN: Could not start ambient audio\n");
-  if (audioInitialized) {
-    audsrv_quit();
-    audioInitialized = 0;
-  }
-  if (controlSema >= 0) DeleteSema(controlSema);
-  if (doneSema >= 0) DeleteSema(doneSema);
-  controlSema = doneSema = -1;
-  if (ambientFile != NULL) {
-    fclose(ambientFile);
-    ambientFile = NULL;
-  }
-  free(ambientData);
-  ambientData = NULL;
+  DPRINTF("WARN: Could not start native ambient audio\n");
+  fclose(file);
+  ambientStop();
 }
 
 void ambientSetEnabled(int shouldPlay) {
-  int next = shouldPlay != 0;
-  if (enabled == next)
+  if (!audioInitialized) {
+    if (shouldPlay) ambientStart(1);
     return;
-  enabled = next;
-  if (threadId >= 0) {
-    SignalSema(controlSema);
   }
+  if ((shouldPlay != 0) == enabled) return;
+  if (shouldPlay) startVoices();
+  else silenceAudio();
 }
 
 void ambientStop(void) {
-  if (threadId >= 0) {
-    stopping = 1;
-    SignalSema(controlSema);
-    WaitSema(doneSema);
-    deleteFinishedWorker(threadId);
-    threadId = -1;
-  }
   if (audioInitialized) {
-    audsrv_quit();
+    silenceAudio();
+    sceSdSetParam(AMBIENT_CORE | SD_PARAM_MVOLL, 0);
+    sceSdSetParam(AMBIENT_CORE | SD_PARAM_MVOLR, 0);
     audioInitialized = 0;
   }
-  if (controlSema >= 0) DeleteSema(controlSema);
-  if (doneSema >= 0) DeleteSema(doneSema);
-  controlSema = doneSema = -1;
-  if (ambientFile != NULL) {
-    fclose(ambientFile);
-    ambientFile = NULL;
-  }
-  free(ambientData);
-  ambientData = NULL;
 }

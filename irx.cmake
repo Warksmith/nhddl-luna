@@ -18,7 +18,7 @@ set(IRX_FILES
     IEEE1394_bd_mini
     ps2hdd-bdm
     ps2fs
-    audsrv
+    ps2snd
 )
 
 # Local IRX files
