@@ -69,6 +69,7 @@ set(SOURCES
   src/ui/case_page.c
   src/ui/view_state.c
   src/ui/art_cache.c
+  src/ui/artwork_slice.c
   src/ui/collection_art.c
     src/ui/view_classic.c
     src/ui/view_collection.c

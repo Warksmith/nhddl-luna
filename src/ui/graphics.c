@@ -1,3 +1,4 @@
+#include "ui/artwork_slice.h"
 // LUNA 2026
 #include "ui/graphics.h"
 #include "ui/ui.h"
@@ -745,7 +746,7 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
   if (!hasAlpha)
     png_set_filler(png_ptr, 0xff, PNG_FILLER_AFTER);
 
-  png_set_interlace_handling(png_ptr);
+  int passes = png_set_interlace_handling(png_ptr);
   png_read_update_info(png_ptr, info_ptr);
 
   if (png_get_channels(png_ptr, info_ptr) != 4) {
@@ -769,7 +770,12 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
   for (row = 0; row < height; row++)
     row_pointers[row] = pixelBuffer + (size_t)row * width * 4;
 
-  png_read_image(png_ptr, row_pointers);
+  for (int pass = 0; pass < passes; pass++) {
+    for (row = 0; row < height; row++) {
+      artworkSliceCheckpoint();
+      png_read_row(png_ptr, row_pointers[row], NULL);
+    }
+  }
   png_read_end(png_ptr, NULL);
 
   struct pixel {
@@ -778,6 +784,7 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
   struct pixel *pixels = (struct pixel *)pixelBuffer;
 
   for (i = 0; i < height; i++) {
+    artworkSliceCheckpoint();
     for (j = 0; j < width; j++) {
       uint8_t sourceAlpha = row_pointers[i][4 * j + 3];
       if (whiteTransparentRgb && sourceAlpha == 0) {

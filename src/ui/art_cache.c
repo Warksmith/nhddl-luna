@@ -1,3 +1,4 @@
+#include "ui/artwork_slice.h"
 // Original LUNA code: Danny Nunez (dnunezx) 2026
 #include "devices/devices.h"
 #include "ui/art_cache.h"
@@ -718,6 +719,7 @@ static void featherPSBBNCoverEdges(GSTEXTURE *texture) {
     return;
 
   for (int y = 0; y < texture->Height; y++) {
+    artworkSliceCheckpoint();
     int edgeY = y;
     if (texture->Height - 1 - y < edgeY)
       edgeY = texture->Height - 1 - y;
@@ -752,6 +754,7 @@ static PSBBNPixel *createArtThumbnail(const PSBBNPixel *source, int width, int h
     return NULL;
   memset(thumbnail, 0, bytes);
   for (int y = 0; y < thumbHeight; y++) {
+    artworkSliceCheckpoint();
     int sourceY1 = y * height / thumbHeight;
     int sourceY2 = (y + 1) * height / thumbHeight;
     if (sourceY2 <= sourceY1)
@@ -938,6 +941,7 @@ static int collectionCoverPath(TargetList *titles, int selectedTitleIdx, int cac
 }
 
 static void decodePSBBNArtJob(PSBBNArtJob *job) {
+  artworkSliceJobBegin(job == &collectionArtJob || job == &collectionFarArtJob);
   GSTEXTURE decoded = {0};
   job->result = decodePNGTextureRGBA(gsGlobal, &decoded, job->path);
   if (job->result == 0)
@@ -979,6 +983,7 @@ static void decodePSBBNArtJob(PSBBNArtJob *job) {
   }
   __asm__ __volatile__("" ::: "memory");
   job->state = 2;
+  artworkSliceJobEnd();
 }
 
 static void collectionArtWorker(void) {
@@ -1023,6 +1028,7 @@ static void clearPSBBNArtJob(PSBBNArtJob *job) {
 }
 
 static void stopCollectionArtWorker(void) {
+  artworkSliceDisable();
   if (collectionArtThreadId >= 0) {
     collectionArtStopping = 1;
     SignalSema(collectionArtWakeSema);
@@ -1039,6 +1045,7 @@ static void stopCollectionArtWorker(void) {
 }
 
 void stopCollectionFarArtWorker(TargetList *titles, int selectedTitleIdx) {
+  artworkSliceDisable();
   if (collectionFarArtThreadId >= 0) {
     collectionFarArtStopping = 1;
     SignalSema(collectionFarArtWakeSema);
@@ -1066,6 +1073,7 @@ void stopCollectionFarArtWorker(TargetList *titles, int selectedTitleIdx) {
 }
 
 void setCollectionArtForeground(int foreground) {
+  if (!foreground) artworkSliceDisable();
   foreground = foreground != 0;
   if (collectionArtForeground == foreground)
     return;

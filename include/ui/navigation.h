@@ -108,6 +108,14 @@ int lunaNavAnimatedOffset(int startOffset, uint32_t startTime, uint32_t duration
 uint32_t lunaNavDurationFrames(uint32_t durationMs, int framesPerSecond);
 int lunaNavClassicGlideFrameOffset(int startOffset, uint32_t elapsedFrames,
                                    uint32_t durationFrames);
+// Elapsed/duration and velocity use the caller's existing frame or time units.
+int lunaNavGlideOffset(int start, uint32_t elapsed, uint32_t duration,
+                       float velocity);
+float lunaNavGlideVelocity(int start, uint32_t elapsed, uint32_t duration,
+                           float velocity);
+float lunaNavGlideCarry(int start, uint32_t duration, float velocity);
+int lunaNavTimedGlideOffset(int start, uint32_t startTime, uint32_t duration,
+                            uint32_t now, float velocity);
 int lunaNavRandomTarget(int total, int selectedIndex, uint32_t randomSeed);
 UILibraryView lunaNavNextView(UILibraryView view, uint32_t enabledViews);
 const char *lunaNavViewLabel(UILibraryView view);

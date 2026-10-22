@@ -216,6 +216,49 @@ int lunaNavClassicGlideFrameOffset(int startOffset, uint32_t elapsedFrames,
   return (startOffset * (1000 - lunaNavEase(progress))) / 1000;
 }
 
+// A normal glide uses the original integer easing, byte-for-byte. Only a
+// fresh same-direction tap during a moving glide supplies an initial speed.
+int lunaNavGlideOffset(int start, uint32_t frame, uint32_t frames,
+                                 float velocity) {
+  if (velocity == 0.0f)
+    return lunaNavClassicGlideFrameOffset(start, frame, frames);
+  if (frames == 0 || frame >= frames)
+    return 0;
+  float t = (float)frame / (float)frames;
+  float remaining = 1.0f - t;
+  return (int)(start * remaining * remaining * (1.0f + 2.0f * t) +
+               velocity * frames * t * remaining * remaining);
+}
+
+float lunaNavGlideVelocity(int start, uint32_t frame, uint32_t frames,
+                                     float velocity) {
+  if (frames == 0 || frame >= frames)
+    return 0.0f;
+  float t = (float)frame / (float)frames;
+  return (start * (6.0f * t * t - 6.0f * t)) / frames +
+         velocity * (3.0f * t * t - 4.0f * t + 1.0f);
+}
+
+float lunaNavGlideCarry(int start, uint32_t frames, float velocity) {
+  if (frames == 0 || start == 0 || start * velocity >= 0.0f)
+    return 0.0f;
+  // Endpoint velocity is zero. This tangent bound keeps the entire cubic
+  // moving toward its destination without overshooting or turning around.
+  float limit = 3.0f * (start < 0 ? -(float)start : (float)start) / frames;
+  if (velocity > limit) velocity = limit;
+  if (velocity < -limit) velocity = -limit;
+  return velocity;
+}
+
+// Orbit and Scroll keep their elapsed-millisecond clock. Zero incoming speed
+// calls their original integer easing, including its quantization and wrap.
+int lunaNavTimedGlideOffset(int start, uint32_t startTime, uint32_t duration,
+                               uint32_t now, float velocity) {
+  if (velocity == 0.0f)
+    return lunaNavAnimatedOffset(start, startTime, duration, now);
+  return lunaNavGlideOffset(start, now - startTime, duration, velocity);
+}
+
 int lunaNavRandomTarget(int total, int selectedIndex, uint32_t randomSeed) {
   int jump;
   if (total <= 1)
