@@ -29,8 +29,9 @@ const char *lunaPsxPrepare(const char *bootstrap,unsigned argumentCount,
 void lunaPsxExecute(void) __attribute__((noreturn));
 // 0: staged, 1: missing cards require explicit creation, -1: preparation error.
 // codeValidation: 0 = off, 1 = on, -1 = saved choice (default off).
+// hdtvFix: 0 = off, 1 = on, -1 = saved choice (default off).
 // startDisc: zero based, or -1 for the saved choice (default Disc 1).
 int lunaPsxPrepareTitleCards(struct Target *target, const struct LunaPsxVmcSettings *selection,
-    int createCards, int codeValidation, int startDisc, char *error, size_t size,
+    int createCards, int codeValidation, int hdtvFix, int startDisc, char *error, size_t size,
     int (*progress)(uint64_t completed, uint64_t total));
 #endif

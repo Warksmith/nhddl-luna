@@ -1579,7 +1579,7 @@ int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection,
   }
   for(;;) {
     if(psxPrepareProgress(0,0))return 0;
-    int result=lunaPsxPrepareTitleCards(target,selection,createCards,codeValidation,startDisc<0?4:startDisc,error,sizeof(error),psxPrepareProgress);
+    int result=lunaPsxPrepareTitleCards(target,selection,createCards,codeValidation,options.ps1HdtvFix,startDisc<0?4:startDisc,error,sizeof(error),psxPrepareProgress);
     if(!result)lunaPsxExecute();
     for(;;) {
       drawPsxLaunchMessage(error,result==1?NULL:lunaText("Press Triangle to return"));

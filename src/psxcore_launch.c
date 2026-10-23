@@ -33,15 +33,15 @@ const char *lunaPsxPrepare(const char *bootstrap,unsigned argumentCount,
     size_t n=fread((void *)LUNA_PSX_STAGE,1,LUNA_PSX_CAPACITY,f);
     int extra=fgetc(f),bad=ferror(f),closed=fclose(f);
     if(extra!=EOF || bad || closed)return "bootstrap-read-size";
-    // Refuse an explicit On selection before leaving the library when the
-    // installed bootstrap predates the public enable switch.
-    for(unsigned i=0;i<argumentCount;++i)if(!strcmp(arguments[i],"--code-validation") || !strcmp(arguments[i],"--disc-set")) {
+    // Refuse an unsupported On selection before leaving the library.
+    for(unsigned i=0;i<argumentCount;++i)if(!strcmp(arguments[i],"--code-validation") || !strcmp(arguments[i],"--disc-set") || !strcmp(arguments[i],"--hdtv-fix")) {
         const char *option=arguments[i];size_t optionBytes=strlen(option)+1;
         const unsigned char *bytes=(const unsigned char *)LUNA_PSX_STAGE;
         int supported=0;
         for(size_t offset=0;offset+optionBytes<=n;++offset)
             if(!memcmp(bytes+offset,option,optionBytes)){supported=1;break;}
-        if(!supported)return !strcmp(option,"--disc-set")?
+        if(!supported)return !strcmp(option,"--hdtv-fix")?
+            "This PSXCore bootstrap does not support HDTV Fix. Update PSXCore.":!strcmp(option,"--disc-set")?
             "This PSXCore bootstrap does not support disc sets. Update PSXCore.":
             "This PSXCore bootstrap does not support Code Validation On. Update PSXCore.";
     }

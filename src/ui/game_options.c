@@ -51,6 +51,7 @@ uint8_t lunaGetOplCompatMask(ArgumentList *arguments) {
 void lunaGameOptionsRead(LunaGameOptions *options, ArgumentList *arguments) {
   memset(options, 0, sizeof(*options));
   options->ps1CodeValidation = argumentEnabled(arguments, "luna_ps1_code_validation");
+  options->ps1HdtvFix = argumentEnabled(arguments, "luna_ps1_hdtv_fix");
   Argument *startDisc = getArgument(arguments, "luna_ps1_start_disc");
   if (startDisc && !startDisc->isDisabled) {
     const char *value = startDisc->value;
@@ -177,6 +178,14 @@ int lunaGameOptionsSetVMC(LunaGameOptions *options, ArgumentList *arguments,
 
 int lunaGameOptionsChange(LunaGameOptions *options, ArgumentList *arguments,
                           LunaGameRow row, int direction) {
+  if (row == LUNA_GAME_PS1_HDTV_FIX) {
+    int enabled = !options->ps1HdtvFix;
+    if (!setArgument(arguments, "luna_ps1_hdtv_fix", "", enabled))
+      return 0;
+    getArgument(arguments, "luna_ps1_hdtv_fix")->isGlobal = 0;
+    options->ps1HdtvFix = enabled;
+    return 1;
+  }
   if (row == LUNA_GAME_PS1_CODE_VALIDATION) {
     int enabled = !options->ps1CodeValidation;
     if (!setArgument(arguments, "luna_ps1_code_validation", "", enabled))
@@ -325,6 +334,8 @@ int lunaGameOptionsCyclePS2Logo(LunaGameOptions *options,
 }
 
 const char *lunaGameOptionsValue(const LunaGameOptions *options, LunaGameRow row) {
+  if (row == LUNA_GAME_PS1_HDTV_FIX)
+    return options->ps1HdtvFix ? lunaText("On") : lunaText("Off");
   if (row == LUNA_GAME_PS1_CODE_VALIDATION)
     return options->ps1CodeValidation ? lunaText("On") : lunaText("Off");
   if (row == LUNA_GAME_NEUTRINO_DISABLE_IGR)

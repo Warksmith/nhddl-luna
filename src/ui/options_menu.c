@@ -163,7 +163,7 @@ static const char *const gameRowLabels[LUNA_GAME_ROW_COUNT] = {
     "Show PS2 logo", "Game core",
     "Accurate reads", "Synchronous reads", "Unhook syscalls",
     "Skip videos", "Emulate DVD-DL", "Disable IGR", "Disable IGR",
-    "Video out", "Field flipping", "Code Validation"};
+    "Video out", "Field flipping", "Code Validation", "HDTV Fix"};
 
 static const char *const gameRowDescriptions[LUNA_GAME_ROW_COUNT] = {
     "Use faster IOP disc reads for this game.",
@@ -187,7 +187,8 @@ static const char *const gameRowDescriptions[LUNA_GAME_ROW_COUNT] = {
     "Disable Neutrino's in-game return for this title.",
     "Open the Neutrino and OPL video output modes.",
     "Emulate field flipping when OPL forces a video output mode.",
-    "Helps with non-boot/black-screen issues. Off by default."};
+    "Helps with non-boot/black-screen issues. Off by default.",
+    "Send low-resolution gameplay as 480i (NTSC) or 576i (PAL) for TVs and HDMI adapters. Off by default."};
 
 static const char *const gameSectionLabels[GAME_SECTION_COUNT] = {
     "Virtual memory cards", "Game core", "Compatibility", "Video", "Cheats", "Launch"};
@@ -506,7 +507,8 @@ static int gameLaunchEnabled(const OptionsMenuState *state) {
                strcmp(name, "mc1") && strcmp(name, "luna_neutrino_disable_igr") &&
                strcmp(name, "luna_opl_compat") && strcmp(name, "luna_opl_gsm") &&
                strcmp(name, "luna_opl_field_flip") && strcmp(name, "luna_core") &&
-               strcmp(name, "luna_ps1_code_validation") && strcmp(name, "luna_ps1_start_disc")) {
+               strcmp(name, "luna_ps1_code_validation") && strcmp(name, "luna_ps1_hdtv_fix") &&
+               strcmp(name, "luna_ps1_start_disc")) {
       // Other arguments belong to Launch arguments, including disabled overrides.
       enabled += !argument->isDisabled || !argument->isGlobal;
     }
@@ -948,31 +950,36 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
       char discSummary[24];
       snprintf(discSummary, sizeof(discSummary), "%u %s", state->target->discs ? state->target->discs->count : 1,
                lunaText("discs"));
-      for (int row = 0; row < 3; ++row)
+      for (int row = 0; row < 4; ++row)
         drawOptionsTextRow(baseX, firstY + row * step, gsGlobal->Width - baseX,
                            state->selectedGameHubRow == row, selectorY,
-                           lunaText(row == 2 ? "Discs" : row ? "Compatibility" : "Virtual memory cards"),
-                           row == 2 ? discSummary : row ? compatSummary : NULL);
+                           lunaText(row == 3 ? "Discs" : row == 2 ? "Video" : row ? "Compatibility" : "Virtual memory cards"),
+                           row == 3 ? discSummary : row == 2 ?
+                               lunaText(state->gameOptions.ps1HdtvFix ? "On" : "Default") :
+                               row ? compatSummary : NULL);
       drawTextWindow(baseX + 18, menuBottom, gsGlobal->Width - baseX,
                      gsGlobal->Height - footerHeight, 0, HeaderTextColor, ALIGN_LEFT,
                      state->vmcStatus[0] ? lunaText(state->vmcStatus) :
-                     lunaText(state->selectedGameHubRow == 2 ? "Choose a starting disc or manage this game's disc set." : state->selectedGameHubRow ?
+                     lunaText(state->selectedGameHubRow == 3 ? "Choose a starting disc or manage this game's disc set." :
+                         state->selectedGameHubRow == 2 ? "Adjust this game's video output." : state->selectedGameHubRow ?
                          "Change this game's compatibility switches." :
                          "Open to select shared memory cards or manage saves."));
-    } else if (state->gameSection == GAME_COMPATIBILITY) {
+    } else if (state->gameSection == GAME_COMPATIBILITY || state->gameSection == GAME_VIDEO) {
+      const LunaGameRow option = state->gameSection == GAME_VIDEO ?
+          LUNA_GAME_PS1_HDTV_FIX : LUNA_GAME_PS1_CODE_VALIDATION;
       drawTextWindow(baseX, menuTop, gsGlobal->Width - baseX, 0, 0,
                      HeaderTextColor, ALIGN_HCENTER, state->titleHeader);
       const int contentTop = menuTop + lineHeight + 5;
       const int firstY = contentTop + lineHeight + 4;
-      drawOptionsSection(contentTop, lunaText("Compatibility"), 0);
+      drawOptionsSection(contentTop, lunaText(state->gameSection == GAME_VIDEO ? "Video" : "Compatibility"), 0);
       int selectorY = optionsSelectorY(&state->selector, state->page, 0, firstY);
       drawOptionsTextRow(baseX, firstY, gsGlobal->Width - baseX, 1, selectorY,
-                         lunaText("Code Validation"),
-                         lunaGameOptionsValue(&state->gameOptions, LUNA_GAME_PS1_CODE_VALIDATION));
+                         lunaText(gameRowLabels[option]),
+                         lunaGameOptionsValue(&state->gameOptions, option));
       drawTextWindow(baseX + 18, menuBottom, gsGlobal->Width - baseX,
                      gsGlobal->Height - footerHeight, 0, HeaderTextColor, ALIGN_LEFT,
                      state->vmcStatus[0] ? lunaText(state->vmcStatus) :
-                     lunaText("Helps with non-boot/black-screen issues. Off by default."));
+                     lunaText(gameRowDescriptions[option]));
     } else if (state->gameSection == GAME_DISCS) {
       const int contentTop = menuTop + lineHeight + 5;
       const int firstY = contentTop + lineHeight + 4;
@@ -1125,7 +1132,7 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
   }
   if (state->page == OPTIONS_PER_GAME && state->target->platform == TARGET_PS1) {
     const ButtonPrompt prompts[] = {{ICON_CROSS, state->gameSection == GAME_HUB ? lunaText("Open") :
-        state->gameSection == GAME_COMPATIBILITY ? lunaText("Toggle") : lunaText("Select")}, {ICON_START, lunaText("Save")},
+        (state->gameSection == GAME_COMPATIBILITY || state->gameSection == GAME_VIDEO) ? lunaText("Toggle") : lunaText("Select")}, {ICON_START, lunaText("Save")},
                                    {ICON_SQUARE, lunaText("Launch")}, {ICON_TRIANGLE, lunaText("Back")}};
 #ifdef LUNA_ENABLE_PSXCORE
     const ButtonPrompt retryPrompts[] = {{ICON_DPAD, lunaText("Move")},
@@ -1636,12 +1643,13 @@ static int handleGameInput(OptionsMenuState *state, int input) {
     }
     if (state->gameSection == GAME_HUB) {
       if (input & (PAD_UP | PAD_DOWN)) {
-        state->selectedGameHubRow = (state->selectedGameHubRow + ((input & PAD_UP) ? 2 : 1)) % 3;
+        state->selectedGameHubRow = (state->selectedGameHubRow + ((input & PAD_UP) ? 3 : 1)) % 4;
         state->vmcStatus[0] = 0;
         return 0;
       }
       if (input & (PAD_CROSS | PAD_CIRCLE)) {
-        state->gameSection = state->selectedGameHubRow == 2 ? GAME_DISCS :
+        state->gameSection = state->selectedGameHubRow == 3 ? GAME_DISCS :
+                             state->selectedGameHubRow == 2 ? GAME_VIDEO :
                              state->selectedGameHubRow ? GAME_COMPATIBILITY : GAME_MEMORY_CARDS;
         state->selectedGameRow = 0;
         state->selector.initialized = 0;
@@ -1699,10 +1707,11 @@ static int handleGameInput(OptionsMenuState *state, int input) {
 #endif
       return 0;
     }
-    if (state->gameSection == GAME_COMPATIBILITY) {
+    if (state->gameSection == GAME_COMPATIBILITY || state->gameSection == GAME_VIDEO) {
       if ((input & (PAD_CROSS | PAD_CIRCLE | PAD_LEFT | PAD_RIGHT)) &&
           lunaGameOptionsChange(&state->gameOptions, state->titleArguments,
-                                LUNA_GAME_PS1_CODE_VALIDATION, 1)) {
+                                state->gameSection == GAME_VIDEO ? LUNA_GAME_PS1_HDTV_FIX :
+                                    LUNA_GAME_PS1_CODE_VALIDATION, 1)) {
         state->titleArgumentsChanged = 1;
         state->saveError = 0;
         state->vmcStatus[0] = 0;

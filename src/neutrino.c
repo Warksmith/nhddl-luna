@@ -71,6 +71,7 @@ int assembleArgv(ArgumentList *arguments, char **argv[]) {
     if (!curArg->isDisabled && strcmp(curArg->arg, "dbc") != 0 &&
         strcmp(curArg->arg, "luna_core") != 0 &&
         strcmp(curArg->arg, "luna_ps1_code_validation") != 0 &&
+        strcmp(curArg->arg, "luna_ps1_hdtv_fix") != 0 &&
         strcmp(curArg->arg, "luna_ps1_start_disc") != 0 &&
         strcmp(curArg->arg, "luna_opl_compat") != 0 &&
         strcmp(curArg->arg, "luna_opl_gsm") != 0 &&

@@ -40,17 +40,19 @@ static const char *firmwareCheck(const char *path,unsigned index) {
 }
 static int titleError(char *out,size_t size,const char *message) {snprintf(out,size,"%s",message);return -1;}
 int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
-    int createCards,int codeValidation,int startDisc,char *error,size_t size,int (*progress)(uint64_t,uint64_t)) {
+    int createCards,int codeValidation,int hdtvFix,int startDisc,char *error,size_t size,int (*progress)(uint64_t,uint64_t)) {
     if(!target || target->platform!=TARGET_PS1 || !target->device ||
        !(STORAGE_SETTINGS.enabled & target->device->mode) ||
        !((target->device->mode==MODE_ATA && target->device->index==0) ||
          (target->device->mode==MODE_USB && target->device->index<=1)))
         return titleError(error,size,"PS1 games require an enabled internal ATA or USB drive.");
     if(target->discs && target->discs->error[0])return titleError(error,size,target->discs->error);
-    if(codeValidation<0 || startDisc<0) {
+    if(codeValidation<0 || hdtvFix<0 || startDisc<0) {
         ArgumentList saved={0};int result=getTitleLaunchArguments(&saved,target);
         Argument *option=getArgument(&saved,"luna_ps1_code_validation");
         if(codeValidation<0)codeValidation=option && !option->isDisabled;
+        option=getArgument(&saved,"luna_ps1_hdtv_fix");
+        if(hdtvFix<0)hdtvFix=option && !option->isDisabled;
         option=getArgument(&saved,"luna_ps1_start_disc");
         if(startDisc<0) {
             startDisc=0;
@@ -137,13 +139,11 @@ int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
     snprintf(discDevice,sizeof(discDevice),"%u",(unsigned)target->device->index);
     const char *args[LUNA_PSX_MAX_ARGS]={"--file",path,"--backend",target->device->mode==MODE_USB?"usb":"ata",
         "--device",discDevice,"--card0",cards[0],"--card1",cards[1]};unsigned count=10;
-#ifdef LUNA_EMULATOR_BUILD
-    args[count++]="--pcsx2";
-#endif
     // The pinned firmware's direct-file boot needs PSXCore's guarded license
     // adapter. Use its public option; the core validates and owns the change.
     args[count++]="--license";
     args[count++]=codeValidation?"--code-validation":"--no-code-validation";
+    if(hdtvFix)args[count++]="--hdtv-fix";
     if(target->discs) {args[count++]="--disc-set";args[count++]=descriptor;}
     if(custom || target->discs) {args[count++]="--volume-id";args[count++]=discId;}
     if(custom) {

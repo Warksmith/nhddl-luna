@@ -7,7 +7,7 @@
 #define LUNA_GAME_COMPAT_COUNT 5
 #define LUNA_NEUTRINO_COMPAT_ROW_COUNT 6
 #define LUNA_OPL_COMPAT_COUNT 6
-#define LUNA_GAME_ROW_COUNT 22
+#define LUNA_GAME_ROW_COUNT 23
 #define LUNA_NEUTRINO_VIDEO_MODE_COUNT 6
 #define LUNA_OPL_VIDEO_MODE_COUNT 30
 
@@ -33,7 +33,8 @@ typedef enum {
   LUNA_GAME_NEUTRINO_DISABLE_IGR,
   LUNA_GAME_OPL_VIDEO_MODE,
   LUNA_GAME_OPL_FIELD_FLIP,
-  LUNA_GAME_PS1_CODE_VALIDATION
+  LUNA_GAME_PS1_CODE_VALIDATION,
+  LUNA_GAME_PS1_HDTV_FIX
 } LunaGameRow;
 
 typedef struct {
@@ -48,6 +49,7 @@ typedef struct {
   int oplCore;
   int coreInherited;
   int ps1CodeValidation;
+  int ps1HdtvFix;
   int ps1StartDisc; // Zero based; -1 preserves an invalid saved value for repair.
   char vmcSlotLabel[2][25];
 } LunaGameOptions;

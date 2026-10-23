@@ -624,6 +624,7 @@ int parseOptionsFile(ArgumentList *result, FILE *file, struct DeviceMapEntry *de
     const char *name = argPtr[0] == '$' ? argPtr + 1 : argPtr;
     if (!strncmp(name, "luna_", 5) &&
         strcmp(name, "luna_ps1_code_validation") &&
+        strcmp(name, "luna_ps1_hdtv_fix") &&
         strcmp(name, "luna_ps1_start_disc") &&
         strcmp(name, "luna_neutrino_disable_igr") &&
         strcmp(name, "luna_core") && strcmp(name, "luna_opl_compat") &&
