@@ -565,7 +565,8 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
   if (target->device->mode == MODE_UDPFS)
     strlcpy(config->g_ps2_ip, LAUNCHER_OPTIONS.udpfsIp[0] ?
             LAUNCHER_OPTIONS.udpfsIp : "192.168.1.10", sizeof(config->g_ps2_ip));
-  config->EnableDebug = 0;
+  Argument *debug = getArgument(arguments, "dbc");
+  config->EnableDebug = debug != NULL && !debug->isDisabled;
   // The HDD return target uses the console's browser boot chain, which
   // routes the held START button back into LUNA. Other configured targets
   // are launcher ELFs that OPL can load directly after IGR.

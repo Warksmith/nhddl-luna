@@ -91,6 +91,7 @@ void lunaGameOptionsRead(LunaGameOptions *options, ArgumentList *arguments) {
     }
   }
   options->ps2Logo = argumentEnabled(arguments, "logo");
+  options->debugColors = argumentEnabled(arguments, "dbc");
   options->neutrinoIgrDisabled =
       argumentEnabled(arguments, "luna_neutrino_disable_igr");
   Argument *core = getArgument(arguments, "luna_core");
@@ -276,6 +277,13 @@ int lunaGameOptionsChange(LunaGameOptions *options, ArgumentList *arguments,
     return 1;
   }
 
+  if (row == LUNA_GAME_DEBUG_COLORS) {
+    int enabled = !options->debugColors;
+    if (!setArgument(arguments, "dbc", "", enabled))
+      return 0;
+    options->debugColors = enabled;
+    return 1;
+  }
   return 0;
 }
 
@@ -357,6 +365,8 @@ const char *lunaGameOptionsValue(const LunaGameOptions *options, LunaGameRow row
     return options->vmcSlotLabel[row - LUNA_GAME_VMC_SLOT1];
   if (row == LUNA_GAME_PS2_LOGO)
     return options->ps2Logo ? lunaText("On") : lunaText("Off");
+  if (row == LUNA_GAME_DEBUG_COLORS)
+    return options->debugColors ? lunaText("On") : lunaText("Off");
   if (row == LUNA_GAME_CORE)
     return options->coreInherited ?
         (options->oplCore ? lunaText("Default (OPL)") : lunaText("Default (Neutrino)")) :

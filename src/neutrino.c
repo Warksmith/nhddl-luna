@@ -68,7 +68,7 @@ int assembleArgv(ArgumentList *arguments, char **argv[]) {
 
   *argv[0] = NEUTRINO_ELF_PATH;
   while (curArg != NULL) {
-    if (!curArg->isDisabled && strcmp(curArg->arg, "dbc") != 0 &&
+    if (!curArg->isDisabled &&
         strcmp(curArg->arg, "luna_core") != 0 &&
         strcmp(curArg->arg, "luna_ps1_code_validation") != 0 &&
         strcmp(curArg->arg, "luna_ps1_hdtv_fix") != 0 &&

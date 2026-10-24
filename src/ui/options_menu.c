@@ -160,7 +160,7 @@ static const char *const gameRowLabels[LUNA_GAME_ROW_COUNT] = {
     "IOP: Fix game buffer overrun", "Launch arguments",
     "VMC slot 1", "VMC slot 2",
     "Video out", "Field flipping",
-    "Show PS2 logo", "Game core",
+    "Show PS2 logo", "Debug colors", "Game core",
     "Accurate reads", "Synchronous reads", "Unhook syscalls",
     "Skip videos", "Emulate DVD-DL", "Disable IGR", "Disable IGR",
     "Video out", "Field flipping", "Code Validation", "HDTV Fix"};
@@ -177,6 +177,7 @@ static const char *const gameRowDescriptions[LUNA_GAME_ROW_COUNT] = {
     "Open the Neutrino and OPL video output modes.",
     "Choose field flipping for a forced video mode.",
     "Choose Inherit to use the Global PS2 logo setting.",
+    "Display debug colors while loading.",
     "Inherit or override the default core for this game.",
     "Use OPL's accurate disc-read behavior.",
     "Use OPL's synchronous disc-read method.",
@@ -207,7 +208,8 @@ static const LunaGameRow gameSectionRows[GAME_SECTION_COUNT][5] = {
      LUNA_GAME_BUFFER_OVERRUN},
     {LUNA_GAME_VIDEO_MODE, LUNA_GAME_FIELD_FLIP},
     {0},
-    {LUNA_GAME_PS2_LOGO, LUNA_GAME_LAUNCH_ARGUMENTS}};
+    {LUNA_GAME_PS2_LOGO, LUNA_GAME_LAUNCH_ARGUMENTS,
+     LUNA_GAME_DEBUG_COLORS}};
 static const LunaGameRow oplCompatRows[LUNA_OPL_COMPAT_COUNT] = {
     LUNA_GAME_OPL_ACCURATE_READS, LUNA_GAME_OPL_SYNC_READS,
     LUNA_GAME_OPL_UNHOOK_SYSCALLS, LUNA_GAME_OPL_SKIP_VIDEOS,
@@ -216,7 +218,7 @@ static const LunaGameRow neutrinoCompatRows[LUNA_NEUTRINO_COMPAT_ROW_COUNT] = {
     LUNA_GAME_FAST_READS, LUNA_GAME_SYNC_READS,
     LUNA_GAME_UNHOOK_SYSCALLS, LUNA_GAME_DVD_DL,
     LUNA_GAME_BUFFER_OVERRUN, LUNA_GAME_NEUTRINO_DISABLE_IGR};
-static const int gameSectionRowCounts[GAME_SECTION_COUNT] = {4, 1, 6, 2, 3, 2};
+static const int gameSectionRowCounts[GAME_SECTION_COUNT] = {4, 1, 6, 2, 3, 3};
 
 static int gameUsesOpl(const OptionsMenuState *state) {
   return lunaOplDevice(state->target->device->mode) != NULL && state->gameOptions.oplCore;
@@ -495,7 +497,7 @@ static int gameVMCEnabled(ArgumentList *arguments) {
 }
 
 static int gameLaunchEnabled(const OptionsMenuState *state) {
-  int enabled = 0;
+  int enabled = state->gameOptions.debugColors;
   for (Argument *argument = state->titleArguments->first;
        argument != NULL; argument = argument->next) {
     const char *name = argument->arg;
