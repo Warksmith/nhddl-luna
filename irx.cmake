@@ -38,17 +38,23 @@ file(GLOB_RECURSE LUNA_IOP_INPUTS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/iop/*.make")
 
 # mmceman
+set(MMCEMAN_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/mmceman")
 add_custom_command(
     OUTPUT
         ${CMAKE_CURRENT_BINARY_DIR}/mmceman.irx
     DEPENDS ${LUNA_IOP_INPUTS} ${CMAKE_CURRENT_SOURCE_DIR}/irx.cmake
-    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/mmceman/mmceman clean DEBUG=0 LOCAL_UDPTTY=0
-    COMMAND make -C ${CMAKE_CURRENT_SOURCE_DIR}/iop/mmceman/mmceman DEBUG=0 LOCAL_UDPTTY=0
+        ${CMAKE_CURRENT_SOURCE_DIR}/iop/mmceman-eof.cmake
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/iop/mmceman/mmceman ${MMCEMAN_BUILD_DIR}
+    COMMAND ${CMAKE_COMMAND} -DDRIVER_DIR=${MMCEMAN_BUILD_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/iop/mmceman-eof.cmake
+    COMMAND make -C ${MMCEMAN_BUILD_DIR} clean DEBUG=0 LOCAL_UDPTTY=0
+    COMMAND make -C ${MMCEMAN_BUILD_DIR} DEBUG=0 LOCAL_UDPTTY=0
     COMMAND ${CMAKE_COMMAND} -E rename
-        ${CMAKE_CURRENT_SOURCE_DIR}/iop/mmceman/mmceman/irx/mmceman.irx
+        ${MMCEMAN_BUILD_DIR}/irx/mmceman.irx
         ${CMAKE_CURRENT_BINARY_DIR}/mmceman.irx
     WORKING_DIRECTORY
-        ${CMAKE_CURRENT_SOURCE_DIR}/iop/mmceman/mmceman
+        ${CMAKE_CURRENT_BINARY_DIR}
     COMMENT "Building mmceman"
 )
 
