@@ -280,7 +280,7 @@ static int ps1BrowseSets(Target *target,LunaPsxVmcSettings *settings) {
     ps1Busy("Reading shared memory cards...");int count=ps1LoadSets(root,sets),selected=0;BrowserSelector selector={.selected=-1};
     for(;;) {
       drawBrowserFrameSelected(lunaText("PlayStation memory cards"),root,
-          target?lunaText("Choose a shared pair. Press Start in game settings to save."):lunaText("Create shared cards, or open a pair to manage its saves."),
+          target?lunaText("Choose a shared pair. The selection saves automatically."):lunaText("Create shared cards, or open a pair to manage its saves."),
           PROMPT_TWO(ICON_CROSS,target?lunaText("Select/Create"):lunaText("Open/Create"),ICON_TRIANGLE,lunaText("Back")),
           count+2,selected,browserFirstRow(selected),ps1SetRow,sets,&selector);
       int input=readInput();if(input&(PAD_CIRCLE|PAD_TRIANGLE))break;

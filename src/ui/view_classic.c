@@ -25,6 +25,14 @@ static int discArtX1;
 static int discArtY1;
 static int classicArtOverlap;
 static int classicSquareCover;
+#ifdef LUNA_CAMERA_ANIMATIONS
+void lunaCameraClassicBounds(float rect[4]) {
+  rect[0] = coverArtX1;
+  rect[1] = coverArtY1;
+  rect[2] = coverArtX2 - coverArtX1;
+  rect[3] = coverArtY2 - coverArtY1;
+}
+#endif
 
 static void drawClassicGlowLayer(int centerX, int centerY, int radiusX, int radiusY,
                                  int z, uint64_t centerColor) {

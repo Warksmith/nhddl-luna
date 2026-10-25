@@ -493,7 +493,8 @@ static OrbShape pickEnabledOrbShape(uint32_t mask, OrbShape previous,
 static OrbShape nextEnabledOrbitShape(OrbShape previous) {
   static const OrbShape order[] = {
     ORB_SHAPE_CUBE, ORB_SHAPE_OCTAHEDRON, ORB_SHAPE_LUNA,
-    ORB_SHAPE_SKULL, ORB_SHAPE_ATOM, ORB_SHAPE_DIAMOND, ORB_SHAPE_SPHERE
+    ORB_SHAPE_SKULL, ORB_SHAPE_ATOM, ORB_SHAPE_DIAMOND, ORB_SHAPE_SPHERE,
+    ORB_SHAPE_IRON_CROSS
   };
   int start = -1;
   for (int i = 0; i < ORB_SHAPE_PLAYTIME; i++)
@@ -704,6 +705,32 @@ static void orbSkullLightPath(int index, uint32_t elapsedMs,
   }
 }
 
+static void orbIronCrossCorner(GlassPoint *point, int corner, uint32_t elapsedMs,
+                                const OrbMotion *motion, int centerX, int centerY,
+                                int radiusX, int radiusY) {
+  // Eight broad arm corners and four inner corners trace one closed cross.
+  static const int points[ORB_COUNT][2] = {
+    {-64, -127}, {64, -127}, {28, -28},
+    {127, -64}, {127, 64}, {28, 28},
+    {64, 127}, {-64, 127}, {-28, 28},
+    {-127, 64}, {-127, -64}, {-28, -28}
+  };
+  // Bounded sway keeps the flared arms facing the viewer throughout.
+  const uint32_t yaw =
+      (int)(orbWave(glassPhase(elapsedMs, 9200, 0)) * (2 << 11) / 127.0f);
+  const uint32_t pitch =
+      (int)(orbWave(glassPhase(elapsedMs, 11300, 1700)) * (1 << 11) / 127.0f);
+  const uint32_t roll =
+      (int)(orbWave(glassPhase(elapsedMs, 12700, 900)) * (1 << 10) / 127.0f);
+  const int smallerRadius = radiusX < radiusY ? radiusX : radiusY;
+  projectCrystalPoint(point, centerX, centerY,
+                      smallerRadius * 86 / 100, yaw, pitch, roll,
+                      points[corner][0], points[corner][1], 0);
+  const float breath = 0.85f + motion->scale / 500.0f;
+  point->x = centerX + (point->x - centerX) * breath;
+  point->y = centerY + (point->y - centerY) * breath;
+}
+
 static void orbPatternPosition(OrbShape shape, int index, uint32_t elapsedMs,
                                const OrbMotion *motion, int centerX, int centerY,
                                int radiusX, int radiusY, float *x, float *y,
@@ -752,6 +779,30 @@ static void orbPatternPosition(OrbShape shape, int index, uint32_t elapsedMs,
     *x = point.x;
     *y = point.y;
     *depth = 65.0f + point.depth / 5.0f;
+    return;
+  }
+  if (shape == ORB_SHAPE_IRON_CROSS) {
+    // Space the lights by distance along the perimeter, including its seam.
+    // Each arm has a 128-unit cap and two sqrt(99^2 + 36^2) sloping sides.
+    static const float edgeLengths[3] = {128.0f, 105.3423f, 105.3423f};
+    const float perimeter = 4.0f * (edgeLengths[0] + 2.0f * edgeLengths[1]);
+    const uint32_t phase = glassPhase(elapsedMs, 7200, 0) +
+                           (uint32_t)index * 65536U / ORB_COUNT;
+    float distance = (phase & 65535U) * perimeter / 65536.0f;
+    int edge = 0;
+    while (edge < ORB_COUNT - 1 && distance >= edgeLengths[edge % 3]) {
+      distance -= edgeLengths[edge % 3];
+      edge++;
+    }
+    const float along = distance / edgeLengths[edge % 3];
+    GlassPoint a, b;
+    orbIronCrossCorner(&a, edge, elapsedMs, motion, centerX, centerY,
+                        radiusX, radiusY);
+    orbIronCrossCorner(&b, (edge + 1) % ORB_COUNT, elapsedMs, motion,
+                        centerX, centerY, radiusX, radiusY);
+    *x = a.x + (b.x - a.x) * along;
+    *y = a.y + (b.y - a.y) * along;
+    *depth = 65.0f + (a.depth + (b.depth - a.depth) * along) / 5.0f;
     return;
   }
   if (shape == ORB_SHAPE_DIAMOND) {
@@ -1119,6 +1170,20 @@ static void drawOrbFormationEdges(OrbShape shape, float extent,
   if (shape == ORB_SHAPE_SKULL || shape == ORB_SHAPE_ATOM) {
     drawOrbCurvedGuides(shape, extent, centerX, centerY, radiusX, radiusY,
                         animationMs, motion, z, alpha);
+    return;
+  }
+  if (shape == ORB_SHAPE_IRON_CROSS) {
+    // Keep the corners intact as lights circulate across the edge interiors.
+    GlassPoint a;
+    orbIronCrossCorner(&a, 0, animationMs, motion, centerX, centerY,
+                        radiusX, radiusY);
+    for (int i = 1; i <= ORB_COUNT; i++) {
+      GlassPoint b;
+      orbIronCrossCorner(&b, i % ORB_COUNT, animationMs, motion,
+                          centerX, centerY, radiusX, radiusY);
+      drawOrbTailStroke(a.x, a.y, b.x, b.y, extent, 3.5f, alpha, z);
+      a = b;
+    }
     return;
   }
   float x[ORB_COUNT], y[ORB_COUNT], depth;

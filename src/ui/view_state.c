@@ -16,6 +16,8 @@ static const char enabledViewsPath[] = "/enabledViews.txt";
 static const char enabledViewsTempPath[] = "/enabledViews.txt.tmp";
 static const char classicLayoutPath[] = "/classicLayout.txt";
 static const char classicLayoutTempPath[] = "/classicLayout.txt.tmp";
+static const char collectionGameListPath[] = "/collectionGameList.txt";
+static const char collectionGameListTempPath[] = "/collectionGameList.txt.tmp";
 static const char backgroundPath[] = "/background.txt";
 static const char backgroundTempPath[] = "/background.txt.tmp";
 static const char orbsThemePath[] = "/orbsTheme.txt";
@@ -180,7 +182,7 @@ int saveLastGameMode(Target *target, TargetFilter filter) {
   return commitConfigFile(tempPath, path) ? -EIO : 0;
 }
 
-int loadClassicArtOverlap(Target *target) {
+static int legacyClassicArtOverlap(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
   const char *paths[] = {classicLayoutTempPath, classicLayoutPath};
   char path[PATH_MAX];
@@ -207,40 +209,32 @@ int loadClassicArtOverlap(Target *target) {
   return 0;
 }
 
-int saveClassicArtOverlap(Target *target, int overlap) {
+static int legacyCollectionGameList(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
-  char directory[PATH_MAX];
-  char path[PATH_MAX];
-  char tempPath[PATH_MAX];
-  struct stat st;
-  FILE *file;
-
+  const char *paths[] = {collectionGameListTempPath, collectionGameListPath};
+  char path[PATH_MAX], value[24];
   if (device == NULL || device->mountpoint == NULL)
-    return -EINVAL;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, classicLayoutPath) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, classicLayoutTempPath))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777)) {
-    return -EIO;
-  }
-  file = fopen(tempPath, "w");
-  if (file == NULL) {
-    return -EIO;
-  }
-  int writeResult = fprintf(file, "%s\n", overlap ? "overlap" : "separate");
-  int closeResult = fclose(file);
-  if (writeResult < 0 || closeResult) {
-    remove(tempPath);
-    return -EIO;
-  }
-  if (commitConfigFile(tempPath, path)) {
-    return -EIO;
+    return 0;
+  for (int i = 0; i < 2; i++) {
+    if (buildConfigFilePath(path, sizeof(path), device->mountpoint, paths[i]))
+      continue;
+    FILE *file = fopen(path, "r");
+    if (file == NULL)
+      continue;
+    int readable = fgets(value, sizeof(value), file) != NULL;
+    fclose(file);
+    if (!readable)
+      continue;
+    value[strcspn(value, "\r\n")] = '\0';
+    if (!strcmp(value, "on"))
+      return 1;
+    if (!strcmp(value, "off"))
+      return 0;
   }
   return 0;
 }
 
-LibraryBackground loadLibraryBackground(Target *target) {
+static LibraryBackground legacyLibraryBackground(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
   const char *paths[] = {backgroundTempPath, backgroundPath};
   char path[PATH_MAX];
@@ -285,45 +279,7 @@ LibraryBackground loadLibraryBackground(Target *target) {
   return LIBRARY_BACKGROUND_STARS;
 }
 
-int saveLibraryBackground(Target *target, LibraryBackground background) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  char directory[PATH_MAX];
-  char path[PATH_MAX];
-  char tempPath[PATH_MAX];
-  struct stat st;
-  FILE *file;
-
-  if (device == NULL || device->mountpoint == NULL)
-    return -EINVAL;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, backgroundPath) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, backgroundTempPath))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777))
-    return -EIO;
-  file = fopen(tempPath, "w");
-  if (file == NULL)
-    return -EIO;
-  static const char *const names[LIBRARY_BACKGROUND_COUNT] = {
-      "stars", "orbs", "red-clouds", "midnight-cubes", "system-config", "neo",
-      "aurora", "ronin", "gridrunner", "torch", "tempest"};
-  if (background < LIBRARY_BACKGROUND_STARS || background >= LIBRARY_BACKGROUND_COUNT) {
-    fclose(file);
-    remove(tempPath);
-    return -EINVAL;
-  }
-  int writeResult = fprintf(file, "%s\n", names[background]);
-  int closeResult = fclose(file);
-  if (writeResult < 0 || closeResult) {
-    remove(tempPath);
-    return -EIO;
-  }
-  if (commitConfigFile(tempPath, path))
-    return -EIO;
-  return 0;
-}
-
-AmbientOrbsTheme loadAmbientOrbsTheme(Target *target) {
+static AmbientOrbsTheme legacyAmbientOrbsTheme(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
   const char *paths[] = {orbsThemeTempPath, orbsThemePath};
   char path[PATH_MAX];
@@ -350,38 +306,7 @@ AmbientOrbsTheme loadAmbientOrbsTheme(Target *target) {
   return ORBS_THEME_LUNA;
 }
 
-int saveAmbientOrbsTheme(Target *target, AmbientOrbsTheme theme) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  char directory[PATH_MAX];
-  char path[PATH_MAX];
-  char tempPath[PATH_MAX];
-  struct stat st;
-
-  if (device == NULL || device->mountpoint == NULL ||
-      (theme != ORBS_THEME_LUNA && theme != ORBS_THEME_PS2_ORIGINAL))
-    return -EINVAL;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, orbsThemePath) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, orbsThemeTempPath))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777))
-    return -EIO;
-  FILE *file = fopen(tempPath, "w");
-  if (file == NULL)
-    return -EIO;
-  int writeResult = fprintf(file, "%s\n", theme == ORBS_THEME_PS2_ORIGINAL ?
-                            "ps2-original" : "luna");
-  int closeResult = fclose(file);
-  if (writeResult < 0 || closeResult) {
-    remove(tempPath);
-    return -EIO;
-  }
-  if (commitConfigFile(tempPath, path))
-    return -EIO;
-  return 0;
-}
-
-uint32_t loadEnabledOrbShapes(Target *target) {
+static uint32_t legacyEnabledOrbShapes(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
   const char *paths[] = {orbShapesTempPath, orbShapesPath};
   char path[PATH_MAX], value[32];
@@ -408,32 +333,7 @@ uint32_t loadEnabledOrbShapes(Target *target) {
   return ORBS_SHAPES_ALL_MASK;
 }
 
-int saveEnabledOrbShapes(Target *target, uint32_t enabledShapes) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  if (device == NULL || device->mountpoint == NULL ||
-      (enabledShapes & ~ORBS_SHAPES_ALL_MASK))
-    return -EINVAL;
-  char directory[PATH_MAX], path[PATH_MAX], tempPath[PATH_MAX];
-  struct stat st;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, orbShapesPath) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, orbShapesTempPath))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777))
-    return -EIO;
-  FILE *file = fopen(tempPath, "w");
-  if (file == NULL)
-    return -EIO;
-  int written = fprintf(file, "%u\n", (unsigned)enabledShapes);
-  int closed = fclose(file);
-  if (written < 0 || closed) {
-    remove(tempPath);
-    return -EIO;
-  }
-  return commitConfigFile(tempPath, path) ? -EIO : 0;
-}
-
-AmbientOrbsAppearance loadAmbientOrbsAppearance(Target *target) {
+static AmbientOrbsAppearance legacyAmbientOrbsAppearance(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
   const char *paths[] = {orbsAppearanceTempPath, orbsAppearancePath};
   char path[PATH_MAX];
@@ -459,38 +359,7 @@ AmbientOrbsAppearance loadAmbientOrbsAppearance(Target *target) {
   return ORBS_APPEARANCE_LUNA;
 }
 
-int saveAmbientOrbsAppearance(Target *target, AmbientOrbsAppearance appearance) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  char directory[PATH_MAX];
-  char path[PATH_MAX];
-  char tempPath[PATH_MAX];
-  struct stat st;
-  if (device == NULL || device->mountpoint == NULL ||
-      (appearance != ORBS_APPEARANCE_LUNA &&
-       appearance != ORBS_APPEARANCE_PS2_ORIGINAL))
-    return -EINVAL;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, orbsAppearancePath) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, orbsAppearanceTempPath))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777))
-    return -EIO;
-  FILE *file = fopen(tempPath, "w");
-  if (file == NULL)
-    return -EIO;
-  int writeResult = fprintf(file, "%s\n", appearance == ORBS_APPEARANCE_PS2_ORIGINAL ?
-                            "ps2-original" : "luna");
-  int closeResult = fclose(file);
-  if (writeResult < 0 || closeResult) {
-    remove(tempPath);
-    return -EIO;
-  }
-  if (commitConfigFile(tempPath, path))
-    return -EIO;
-  return 0;
-}
-
-AmbientOrbsColor loadAmbientOrbsColor(Target *target, AmbientOrbsColorPart part) {
+static AmbientOrbsColor legacyAmbientOrbsColor(Target *target, AmbientOrbsColorPart part) {
   struct DeviceMapEntry *device = viewDevice(target);
   if (device == NULL || device->mountpoint == NULL ||
       (part != ORBS_COLOR_PART_ORBS && part != ORBS_COLOR_PART_TAILS))
@@ -519,41 +388,7 @@ AmbientOrbsColor loadAmbientOrbsColor(Target *target, AmbientOrbsColorPart part)
   return ORBS_COLOR_ORIGINAL;
 }
 
-int saveAmbientOrbsColor(Target *target, AmbientOrbsColorPart part,
-                         AmbientOrbsColor color) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  if (device == NULL || device->mountpoint == NULL ||
-      (part != ORBS_COLOR_PART_ORBS && part != ORBS_COLOR_PART_TAILS) ||
-      color < ORBS_COLOR_ORIGINAL || color >= ORBS_COLOR_COUNT)
-    return -EINVAL;
-  char directory[PATH_MAX];
-  char path[PATH_MAX];
-  char tempPath[PATH_MAX];
-  const char *name = part == ORBS_COLOR_PART_ORBS ? orbsColorPath : tailsColorPath;
-  const char *tempName = part == ORBS_COLOR_PART_ORBS ?
-                         orbsColorTempPath : tailsColorTempPath;
-  struct stat st;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, name) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, tempName))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777))
-    return -EIO;
-  FILE *file = fopen(tempPath, "w");
-  if (file == NULL)
-    return -EIO;
-  int writeResult = fprintf(file, "%s\n", orbsColorNames[color]);
-  int closeResult = fclose(file);
-  if (writeResult < 0 || closeResult) {
-    remove(tempPath);
-    return -EIO;
-  }
-  if (commitConfigFile(tempPath, path))
-    return -EIO;
-  return 0;
-}
-
-uint32_t loadEnabledLibraryViews(Target *target) {
+static uint32_t legacyEnabledLibraryViews(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
   const char *paths[] = {enabledViewsTempPath, enabledViewsPath};
   char path[PATH_MAX];
@@ -582,37 +417,7 @@ uint32_t loadEnabledLibraryViews(Target *target) {
   return UI_VIEW_DEFAULT_MASK;
 }
 
-int saveEnabledLibraryViews(Target *target, uint32_t enabledViews) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  char directory[PATH_MAX];
-  char path[PATH_MAX];
-  char tempPath[PATH_MAX];
-  struct stat st;
-
-  if (device == NULL || device->mountpoint == NULL || enabledViews == 0 ||
-      (enabledViews & ~UI_VIEW_ALL_MASK) != 0)
-    return -EINVAL;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, enabledViewsPath) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, enabledViewsTempPath))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777))
-    return -EIO;
-  FILE *file = fopen(tempPath, "w");
-  if (file == NULL)
-    return -EIO;
-  int writeResult = fprintf(file, "%lu\n", (unsigned long)enabledViews);
-  int closeResult = fclose(file);
-  if (writeResult < 0 || closeResult) {
-    remove(tempPath);
-    return -EIO;
-  }
-  if (commitConfigFile(tempPath, path))
-    return -EIO;
-  return 0;
-}
-
-GlassColorPreset loadGlassColorPreset(Target *target) {
+static GlassColorPreset legacyGlassColorPreset(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
   const char *paths[] = {glassColorTempPath, glassColorPath};
   char path[PATH_MAX];
@@ -638,38 +443,7 @@ GlassColorPreset loadGlassColorPreset(Target *target) {
   return GLASS_COLOR_ORIGINAL;
 }
 
-int saveGlassColorPreset(Target *target, GlassColorPreset preset) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  char directory[PATH_MAX];
-  char path[PATH_MAX];
-  char tempPath[PATH_MAX];
-  struct stat st;
-  FILE *file;
-
-  if (device == NULL || device->mountpoint == NULL ||
-      preset < GLASS_COLOR_ORIGINAL || preset >= GLASS_COLOR_COUNT)
-    return -EINVAL;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, glassColorPath) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, glassColorTempPath))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777))
-    return -EIO;
-  file = fopen(tempPath, "w");
-  if (file == NULL)
-    return -EIO;
-  int writeResult = fprintf(file, "%s\n", glassColorNames[preset]);
-  int closeResult = fclose(file);
-  if (writeResult < 0 || closeResult) {
-    remove(tempPath);
-    return -EIO;
-  }
-  if (commitConfigFile(tempPath, path))
-    return -EIO;
-  return 0;
-}
-
-UIFont loadUIFont(Target *target) {
+static UIFont legacyUIFont(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
   const char *paths[] = {uiFontTempPath, uiFontPath};
   char path[PATH_MAX];
@@ -696,38 +470,7 @@ UIFont loadUIFont(Target *target) {
   return UI_FONT_DEJAVU;
 }
 
-int saveUIFont(Target *target, UIFont selection) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  char directory[PATH_MAX];
-  char path[PATH_MAX];
-  char tempPath[PATH_MAX];
-  struct stat st;
-  FILE *file;
-
-  if (device == NULL || device->mountpoint == NULL ||
-      selection < UI_FONT_DEJAVU || selection >= UI_FONT_COUNT)
-    return -EINVAL;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, uiFontPath) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, uiFontTempPath))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777))
-    return -EIO;
-  file = fopen(tempPath, "w");
-  if (file == NULL)
-    return -EIO;
-  int writeResult = fprintf(file, "%s\n", uiFontNames[selection]);
-  int closeResult = fclose(file);
-  if (writeResult < 0 || closeResult) {
-    remove(tempPath);
-    return -EIO;
-  }
-  if (commitConfigFile(tempPath, path))
-    return -EIO;
-  return 0;
-}
-
-Ps1CaseStyle loadPs1CaseStyle(Target *target) {
+static Ps1CaseStyle legacyPs1CaseStyle(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
   const char *paths[] = {ps1CaseStyleTempPath, ps1CaseStylePath};
   char path[PATH_MAX], value[24];
@@ -749,32 +492,7 @@ Ps1CaseStyle loadPs1CaseStyle(Target *target) {
   return PS1_CASE_TALL;
 }
 
-int savePs1CaseStyle(Target *target, Ps1CaseStyle style) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  char directory[PATH_MAX], path[PATH_MAX], tempPath[PATH_MAX];
-  struct stat st;
-  if (device == NULL || device->mountpoint == NULL ||
-      (style != PS1_CASE_TALL && style != PS1_CASE_SQUARE))
-    return -EINVAL;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, ps1CaseStylePath) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, ps1CaseStyleTempPath))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777))
-    return -EIO;
-  FILE *file = fopen(tempPath, "w");
-  if (file == NULL) return -EIO;
-  int written = fprintf(file, "%s\n", style == PS1_CASE_SQUARE ? "square" : "tall");
-  int closed = fclose(file);
-  if (written < 0 || closed) {
-    remove(tempPath);
-    return -EIO;
-  }
-  if (commitConfigFile(tempPath, path)) return -EIO;
-  return 0;
-}
-
-int loadAmbientSoundEnabled(Target *target) {
+static int legacyAmbientSoundEnabled(Target *target) {
   struct DeviceMapEntry *device = viewDevice(target);
   const char *paths[] = {ambientSoundTempPath, ambientSoundPath};
   char path[PATH_MAX];
@@ -801,32 +519,19 @@ int loadAmbientSoundEnabled(Target *target) {
   return 0;
 }
 
-int saveAmbientSoundEnabled(Target *target, int enabled) {
-  struct DeviceMapEntry *device = viewDevice(target);
-  char directory[PATH_MAX];
-  char path[PATH_MAX];
-  char tempPath[PATH_MAX];
-  struct stat st;
-  FILE *file;
 
-  if (device == NULL || device->mountpoint == NULL)
-    return -EINVAL;
-  if (buildConfigFilePath(directory, sizeof(directory), device->mountpoint, NULL) ||
-      buildConfigFilePath(path, sizeof(path), device->mountpoint, ambientSoundPath) ||
-      buildConfigFilePath(tempPath, sizeof(tempPath), device->mountpoint, ambientSoundTempPath))
-    return -ENAMETOOLONG;
-  if (stat(directory, &st) == -1 && mkdir(directory, 0777))
-    return -EIO;
-  file = fopen(tempPath, "w");
-  if (file == NULL)
-    return -EIO;
-  int writeResult = fprintf(file, "%s\n", enabled ? "on" : "off");
-  int closeResult = fclose(file);
-  if (writeResult < 0 || closeResult) {
-    remove(tempPath);
-    return -EIO;
-  }
-  if (commitConfigFile(tempPath, path))
-    return -EIO;
-  return 0;
+void loadLegacyAppearance(Target *target, LunaAppearance *settings) {
+  settings->background = legacyLibraryBackground(target);
+  settings->glassColor = legacyGlassColorPreset(target);
+  settings->font = legacyUIFont(target);
+  settings->ambientSound = legacyAmbientSoundEnabled(target);
+  settings->enabledViews = legacyEnabledLibraryViews(target);
+  settings->classicOverlap = legacyClassicArtOverlap(target);
+  settings->collectionGameList = legacyCollectionGameList(target);
+  settings->ps1CaseStyle = legacyPs1CaseStyle(target);
+  settings->orbsTheme = legacyAmbientOrbsTheme(target);
+  settings->orbsAppearance = legacyAmbientOrbsAppearance(target);
+  settings->orbsColor = legacyAmbientOrbsColor(target, ORBS_COLOR_PART_ORBS);
+  settings->orbShapes = legacyEnabledOrbShapes(target);
+  settings->tailsColor = legacyAmbientOrbsColor(target, ORBS_COLOR_PART_TAILS);
 }

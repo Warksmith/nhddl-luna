@@ -15,6 +15,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#define NEWLIB_PORT_AWARE
+#include <fileXio_rpc.h>
 
 int loadArgumentList(ArgumentList *options, struct DeviceMapEntry *device, char *filePath);
 int parseOptionsFile(ArgumentList *result, FILE *file, struct DeviceMapEntry *device);
@@ -405,6 +407,43 @@ int saveGameCoreOpl(Target *target, int opl) {
   return commitConfigFile(tempPath, path);
 }
 
+// BDM exposes raw FatFs missing-file/path results rather than POSIX errno.
+static int gameOptionsFileMissing(const char *path) {
+  if (!strncmp(path, "mass", 4) && path[4] >= '0' && path[4] <= '9' && path[5] == ':') {
+    iox_stat_t info;
+    int result = fileXioGetStat(path, &info);
+    return result == -4 || result == -5;
+  }
+  struct stat info;
+  return stat(path, &info) < 0 && errno == ENOENT;
+}
+
+static uint32_t gameOptionsChecksum(uint32_t hash, const char *bytes, size_t length) {
+  for (size_t i = 0; i < length; i++)
+    hash = (hash ^ (unsigned char)bytes[i]) * 16777619U;
+  return hash;
+}
+
+// A complete footer distinguishes a published recovery copy from an interrupted
+// copy. No rename support is required from the storage driver.
+static int gameOptionsBackupValid(const char *path) {
+  FILE *file = fopen(path, "rb");
+  if (!file) return 0;
+  char line[PATH_MAX + 64], expected[64];
+  uint32_t hash = 2166136261U;
+  int valid = 0;
+  while (fgets(line, sizeof(line), file)) {
+    if (!strncmp(line, "# LUNA_CONFIG_BACKUP ", 21)) {
+      snprintf(expected, sizeof(expected), "# LUNA_CONFIG_BACKUP %08x\n", (unsigned)hash);
+      valid = !strcmp(line, expected) && fgetc(file) == EOF && !ferror(file);
+      break;
+    }
+    hash = gameOptionsChecksum(hash, line, strlen(line));
+  }
+  if (fclose(file)) valid = 0;
+  return valid;
+}
+
 // Generates ArgumentList from global and title-specific config file
 int getTitleLaunchArguments(ArgumentList *result, Target *target) {
   struct DeviceMapEntry *device = target->device;
@@ -427,7 +466,7 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
       continue;
 
     // Older configs may use a longer prefix than the displayed ISO name.
-    // Prefer the exact filename written by the Save action when both exist.
+    // Prefer the exact filename, including its recovery copy when present.
     char filename[PATH_MAX + 1] = "";
     struct dirent *entry;
     char setName[48];
@@ -437,13 +476,18 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
     size_t nameLength = strlen(configName);
     while ((entry = readdir(directory)) != NULL) {
       size_t entryLength = strlen(entry->d_name);
+      if (entryLength >= 9 && !strcmp(entry->d_name + entryLength - 9, ".yaml.bak"))
+        entryLength -= 4;
       if (entry->d_type == DT_DIR || entryLength < nameLength + 5 ||
           strncmp(entry->d_name, configName, nameLength) ||
-          strcmp(entry->d_name + entryLength - 5, ".yaml"))
+          strncmp(entry->d_name + entryLength - 5, ".yaml", 5))
         continue;
       if (filename[0] == '\0' ||
           (entryLength == nameLength + 5 && entry->d_name[nameLength] == '.'))
+      {
         strlcpy(filename, entry->d_name, sizeof(filename));
+        filename[entryLength] = '\0';
+      }
       if (entryLength == nameLength + 5 && entry->d_name[nameLength] == '.')
         break;
     }
@@ -453,8 +497,15 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
     if (snprintf(targetPath, sizeof(targetPath), "%s/%s", directoryPath, filename) >= sizeof(targetPath))
       return -ENAMETOOLONG;
 
-    int ret = loadArgumentList(result, device, targetPath);
-    return ret;
+    // A backup remains authoritative until the entire replacement succeeds.
+    char backup[PATH_MAX + 8];
+    if (snprintf(backup, sizeof(backup), "%s.bak", targetPath) >= sizeof(backup))
+      return -ENAMETOOLONG;
+    if (gameOptionsBackupValid(backup))
+      return loadArgumentList(result, device, backup);
+    if (gameOptionsFileMissing(targetPath))
+      continue; // An incomplete first backup must not hide legacy/default settings.
+    return loadArgumentList(result, device, targetPath);
   }
   if (target->discs && target->discs->count && !target->discs->error[0]) {
     // Inherit Disc 1's existing compatibility choice until the set is saved.
@@ -471,6 +522,60 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
 // Saves title launch arguments to title-specific config file.
 // '$' before the argument name is used as 'disabled' flag.
 // Empty value means that the argument is empty, but still should be used without the value.
+static int writeTitleArgumentsFile(Target *target, ArgumentList *options,
+                                    const char *path, int recovery) {
+  // Recreate this destination to avoid stale trailing bytes on BDM.
+  if (remove(path) && !gameOptionsFileMissing(path)) return -EIO;
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+  if (fd < 0) return -EIO;
+  // Write each argument into the file
+  char lineBuffer[PATH_MAX + 1];
+  int len = 0;
+  int ret = 0;
+  uint32_t hash = 2166136261U;
+  Argument *tArg = options->first;
+  while (tArg != NULL) {
+    len = 0;
+    // Skip enabled global arguments
+    // Write disabled global arguments as disabled empty arguments
+    if (!tArg->isGlobal) {
+      // Check if arg is a file path and trim mountpoint
+      const char *value = tArg->value ? tArg->value : "";
+      if (!strcmp(tArg->arg, "mc0") || !strcmp(tArg->arg, "mc1"))
+        value = storageVMCRelativePath(target->device, value);
+      else {
+        len = tArg->value ? getRelativePathIdx(tArg->value) : 0;
+        if (len > 0) value += len;
+      }
+      len = snprintf(lineBuffer, sizeof(lineBuffer), "%s%s: %s\n", (tArg->isDisabled) ? "$" : "", tArg->arg,
+                     value);
+    } else if (tArg->isDisabled && strcmp(tArg->arg, "logo")) {
+      // The disabled library logo default is not a per-game override.
+      len = snprintf(lineBuffer, sizeof(lineBuffer), "$%s:\n", tArg->arg);
+    }
+    if (len > 0) {
+      if ((size_t)len >= sizeof(lineBuffer)) {
+        ret = -ENAMETOOLONG;
+        goto out;
+      }
+      if (writeAll(fd, lineBuffer, len)) {
+        ret = -EIO;
+        goto out;
+      }
+      hash = gameOptionsChecksum(hash, lineBuffer, (size_t)len);
+    }
+    tArg = tArg->next;
+  }
+  if (recovery) {
+    len = snprintf(lineBuffer, sizeof(lineBuffer), "# LUNA_CONFIG_BACKUP %08x\n", (unsigned)hash);
+    ret = writeAll(fd, lineBuffer, (size_t)len);
+  }
+out:
+  if (close(fd) < 0 && !ret)
+    ret = -EIO;
+  return ret;
+}
+
 int updateTitleLaunchArguments(Target *target, ArgumentList *options) {
   struct DeviceMapEntry *device = target->device;
   if (device->metadev) { // Fallback to metadata device if set
@@ -494,52 +599,34 @@ int updateTitleLaunchArguments(Target *target, ArgumentList *options) {
   if (buildConfigFilePath(lineBuffer, sizeof(lineBuffer), device->mountpoint, filename))
     return -ENAMETOOLONG;
 
-  // Open file, truncating it
-  int fd = open(lineBuffer, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-  if (fd < 0) {
-    return -EIO;
-  }
+  char path[PATH_MAX + 1], stage[PATH_MAX + 8];
+  char backup[PATH_MAX + 8], backupStage[PATH_MAX + 16];
+  strcpy(path, lineBuffer);
+  if (snprintf(stage, sizeof(stage), "%s.tmp", path) >= sizeof(stage) ||
+      snprintf(backup, sizeof(backup), "%s.bak", path) >= sizeof(backup) ||
+      snprintf(backupStage, sizeof(backupStage), "%s.bak.tmp", path) >= sizeof(backupStage))
+    return -ENAMETOOLONG;
 
-  // Write each argument into the file
-  lineBuffer[0] = '\0'; // reuse buffer
-  int len = 0;
-  int ret = 0;
-  Argument *tArg = options->first;
-  while (tArg != NULL) {
-    len = 0;
-    // Skip enabled global arguments
-    // Write disabled global arguments as disabled empty arguments
-    if (!tArg->isGlobal) {
-      // Check if arg is a file path and trim mountpoint
-      const char *value = tArg->value;
-      if (!strcmp(tArg->arg, "mc0") || !strcmp(tArg->arg, "mc1"))
-        value = storageVMCRelativePath(target->device, value);
-      else {
-        len = getRelativePathIdx(tArg->value);
-        if (len > 0) value += len;
-      }
-      len = snprintf(lineBuffer, sizeof(lineBuffer), "%s%s: %s\n", (tArg->isDisabled) ? "$" : "", tArg->arg,
-                     value);
-    } else if (tArg->isDisabled && strcmp(tArg->arg, "logo")) {
-      // The disabled library logo default is not a per-game override.
-      len = snprintf(lineBuffer, sizeof(lineBuffer), "$%s:\n", tArg->arg);
-    }
-    if (len > 0) {
-      if ((size_t)len >= sizeof(lineBuffer)) {
-        ret = -ENAMETOOLONG;
-        goto out;
-      }
-      if (writeAll(fd, lineBuffer, len)) {
-        ret = -EIO;
-        goto out;
-      }
-    }
-    tArg = tArg->next;
+  int result = writeTitleArgumentsFile(target, options, stage, 0);
+  if (result) return result;
+  // Preserve the previous loaded choice, including legacy files and disc-set
+  // inheritance. Publish the recovery file only after it is completely written.
+  ArgumentList *previous = calloc(1, sizeof(*previous));
+  if (!previous) return -ENOMEM;
+  result = getTitleLaunchArguments(previous, target);
+  if (!result && !gameOptionsBackupValid(backup)) {
+    result = writeTitleArgumentsFile(target, previous, backupStage, 1);
+    if (!result && remove(backup) && !gameOptionsFileMissing(backup)) result = -EIO;
+    if (!result) result = commitConfigFile(backupStage, backup);
+    if (!result && !gameOptionsBackupValid(backup)) result = -EIO;
   }
-out:
-  if (close(fd) < 0 && !ret)
-    ret = -EIO;
-  return ret;
+  freeArgumentList(previous);
+  if (result) return result;
+  if (remove(path) && !gameOptionsFileMissing(path)) return -EIO;
+  result = commitConfigFile(stage, path);
+  if (result) return result;
+  // Removing the recovery file publishes the new choice to readers.
+  return remove(backup) ? -EIO : 0;
 }
 
 // Parses options file into ArgumentList

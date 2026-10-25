@@ -16,6 +16,9 @@
 #include "ui/graphics.h"
 #include "ui/handoff.h"
 #include "ui/navigation.h"
+#ifdef LUNA_CAMERA_ANIMATIONS
+#include "ui/camera_transitions.h"
+#endif
 #include "ui/options_menu.h"
 #include "ui/game_options.h"
 #include "ui/view_scroll.h"
@@ -407,6 +410,9 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   int entryView = -1;
   int entryPending = 0;
   int collectionEntryFade = -1;
+#ifdef LUNA_CAMERA_ANIMATIONS
+  int collectionFromList = 0;
+#endif
   uint32_t entryStartMs = 0;
   uint32_t entryDurationMs = LIBRARY_VIEW_ENTRY_MS;
   int caseViewSwitchPending = 0;
@@ -486,6 +492,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   ambientSetEnabled(ambientEnabled);
   classicArtOverlap = loadClassicArtOverlap(curTarget);
   setClassicArtOverlap(classicArtOverlap);
+  setCollectionGameList(loadCollectionGameList(curTarget));
 
   favoriteFlags = calloc((size_t)titles->total, sizeof(*favoriteFlags));
   if (favoriteFlags == NULL) {
@@ -556,6 +563,13 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     const char *nextViewLabel = nextView == view ? lunaText("Only view") :
                                 lunaNavViewLabel(nextView);
 
+#ifdef LUNA_CAMERA_ANIMATIONS
+    lunaCameraViewCheck(view == UI_VIEW_PSBBN,
+        titles->total > 0 ? getTargetByIdx(titles, selectedTitleIdx)->idx : -1);
+    lunaCameraChannelCheck(view == UI_VIEW_ORBIT,
+        titles->total > 0 ? getTargetByIdx(titles, selectedTitleIdx)->idx : -1);
+    lunaCameraSceneBegin(quickMenu.open, uiNowMs());
+#endif
     if (titles->total == 0) {
       drawSharedLibraryBackground(uiNowMs());
       drawTextWindow(20, headerHeight, gsGlobal->Width - 20,
@@ -776,11 +790,16 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         int visualRank = lunaNavWrap(flowTitles->total, flowSelectedTitleIdx +
                                     collectionVisualCoverIdx - PSBBN_COVER_CACHE_FOCUS);
         collectionVisualTitleIdx = visualRank;
+        int collectionEntryProgress = entryPending ? -1 :
+            libraryViewEntryProgress(entryView, view, entryStartMs, entryDurationMs, now);
+#ifdef LUNA_CAMERA_ANIMATIONS
+        if (collectionFromList)
+          collectionEntryProgress = 1000;
+#endif
         drawPSBBNCollection(flowTitles, flowSelectedTitleIdx, psbbnCoverTextures,
                             flowOffset, psbbnOutgoingTitleIdx, favoritesOnly,
                             collectionScan.active,
-                            entryPending ? -1 :
-                                libraryViewEntryProgress(entryView, view, entryStartMs, entryDurationMs, now),
+                            collectionEntryProgress,
                             collectionEntryFade, now, nextViewLabel);
       } else if (view == UI_VIEW_ORBIT)
         drawOrbit(titles, selectedTitleIdx, psbbnCoverTextures, flowOffset,
@@ -830,6 +849,9 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     }
 
   library_view_drawn:
+#ifdef LUNA_CAMERA_ANIMATIONS
+    lunaCameraSceneEnd();
+#endif
     gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
     drawLibraryFooter(titles->total > 0);
     if (favoritesOnly && view != UI_VIEW_CLASSIC && view != UI_VIEW_PSBBN)
@@ -1156,7 +1178,18 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     }
 
     UILibraryView previousView = view;
+#ifdef LUNA_CAMERA_ANIMATIONS
+    if (input & (PAD_LEFT | PAD_RIGHT | PAD_UP | PAD_DOWN | PAD_L2 | PAD_R2 |
+                 PAD_CROSS | PAD_TRIANGLE | PAD_START | PAD_SELECT | PAD_R1))
+      lunaCameraViewCancel();
+#endif
     int wasCollectionFavorites = 0;
+#ifdef LUNA_CAMERA_ANIMATIONS
+    if (input & (PAD_LEFT | PAD_RIGHT | PAD_UP | PAD_DOWN | PAD_L2 | PAD_R2 |
+                 PAD_CROSS | PAD_TRIANGLE | PAD_START | PAD_SELECT | PAD_R1 | PAD_SQUARE))
+      lunaCameraChannelCancel();
+
+#endif
     int libraryListChanged = 0;
 #ifdef LUNA_ENABLE_PSXCORE
     if (input & PAD_L3) {
@@ -1207,6 +1240,23 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       if (view == previousView)
         continue;
     restart_library_view:
+#ifdef LUNA_CAMERA_ANIMATIONS
+      if (!libraryListChanged && previousView == UI_VIEW_PSBBN &&
+          view == UI_VIEW_ORBIT && titles->total > 0 && !lunaCameraViewActive() &&
+          lunaCameraCollectionHasFrame(curTarget->idx))
+        lunaCameraChannelStart(curTarget->idx);
+      else
+        lunaCameraChannelCancel();
+      if (!libraryListChanged && previousView == UI_VIEW_CLASSIC &&
+          view == UI_VIEW_PSBBN && titles->total > 0 &&
+          classicDisplayedArtTarget == curTarget && classicDisplayedCoverAvailable) {
+        float sourceCoverRect[4];
+        lunaCameraClassicBounds(sourceCoverRect);
+        lunaCameraViewStart(coverTexture, curTarget->idx, sourceCoverRect);
+      } else {
+        lunaCameraViewCancel();
+      }
+#endif
       setCollectionArtForeground(view == UI_VIEW_PSBBN);
       collectionPreloadIdleSinceMs = uiNowMs();
       // PSBBN and Orbit release their cache in the view cleanup below.
@@ -1220,6 +1270,13 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
           ? CASE_VIEW_HANDOFF_MS : LIBRARY_VIEW_ENTRY_MS;
       entryPending = view != UI_VIEW_CLASSIC && titles->total > 0;
       collectionEntryFade = -1;
+#ifdef LUNA_CAMERA_ANIMATIONS
+      /* List uses the edge-on artwork turn, without another entry reveal. */
+      collectionFromList = LUNA_CAMERA_LIST_TURN && !libraryListChanged && previousView == UI_VIEW_CLASSIC &&
+                           view == UI_VIEW_PSBBN;
+      if (collectionFromList)
+        collectionEntryFade = 0;
+#endif
       collectionCirclePending = view == UI_VIEW_PSBBN && titles->total > 0;
       classicEntryFirstFramePending = view == UI_VIEW_CLASSIC &&
                                       previousView != UI_VIEW_CLASSIC;
@@ -1426,6 +1483,10 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   }
 
 exit:
+#ifdef LUNA_CAMERA_ANIMATIONS
+  lunaCameraChannelCancel();
+  lunaCameraViewCancel();
+#endif
   ambientStop();
   closePad();
   if (res == STORAGE_UI_REFRESH) {

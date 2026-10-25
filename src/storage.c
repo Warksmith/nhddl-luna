@@ -1,5 +1,6 @@
 // LUNA 2026: all supported storage sources share one refresh lifecycle.
 #include "storage.h"
+#include "ui/appearance.h"
 #include "ui/language.h"
 #include "devices/devices.h"
 #include "devices/init.h"
@@ -219,6 +220,7 @@ static int hasScannedTarget(const TargetList *list, const Target *old) {
 }
 
 TargetList *storageRefresh(TargetList *previous) {
+  resetAppearanceCache();
   TargetList *next = calloc(1, sizeof(*next));
   if (!next) return NULL;
   int refreshError = -ENOMEM;

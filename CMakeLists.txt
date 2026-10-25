@@ -13,6 +13,10 @@ if(ENABLE_PRINTF)
   message(FATAL_ERROR "Diagnostics are local-only. Configure production with ENABLE_PRINTF=OFF.")
 endif()
 option(LUNA_EMULATOR_BUILD "Enable behavior used only by emulator test builds" OFF)
+option(LUNA_CAMERA_ANIMATIONS "Enable camera animations in library views" ON)
+option(LUNA_CAMERA_MENU_PAN "Pan the library scene with the quick menu" ON)
+option(LUNA_CAMERA_LIST_TURN "Turn the selected cover from List into Collections" ON)
+option(LUNA_CAMERA_ORBIT_TRANSITION "Move Collections covers into Orbit" ON)
 option(LUNA_ENABLE_PSXCORE "Build with the experimental PSXCore dependency" OFF)
 if(LUNA_PSXCORE_DEVELOPMENT)
   message(FATAL_ERROR "The development launch harness is local-only and is not part of production.")
@@ -68,6 +72,7 @@ set(SOURCES
   src/ui/navigation.c
   src/ui/case_page.c
   src/ui/view_state.c
+  src/ui/appearance.c
   src/ui/art_cache.c
   src/ui/artwork_slice.c
   src/ui/collection_art.c
@@ -121,6 +126,13 @@ endif()
 
 # Create the main executable
 add_executable(${EE_BIN} ${SOURCES})
+if(LUNA_CAMERA_ANIMATIONS)
+  target_sources(${EE_BIN} PRIVATE src/ui/psbbn_motion.c src/ui/camera_transitions.c)
+  target_compile_definitions(${EE_BIN} PRIVATE LUNA_CAMERA_ANIMATIONS=1
+    LUNA_CAMERA_MENU_PAN=$<BOOL:${LUNA_CAMERA_MENU_PAN}>
+    LUNA_CAMERA_LIST_TURN=$<BOOL:${LUNA_CAMERA_LIST_TURN}>
+    LUNA_CAMERA_ORBIT_TRANSITION=$<BOOL:${LUNA_CAMERA_ORBIT_TRANSITION}>)
+endif()
 
 if(LUNA_ENABLE_PSXCORE)
   enable_language(ASM)

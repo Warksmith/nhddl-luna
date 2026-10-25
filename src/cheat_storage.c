@@ -178,7 +178,7 @@ int lunaCheatsPrepare(Target *target, const LunaCheatSettings *settings,
   if (!settings) {
     int result = lunaCheatsLoadSettings(target, &saved);
     if (result) {
-      snprintf(error, size, lunaText("Could not read cheat settings. Open Cheats and save again."));
+      snprintf(error, size, lunaText("Could not read cheat settings. Open Cheats and change an option."));
       return result;
     }
     settings = &saved;

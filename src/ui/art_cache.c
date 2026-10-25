@@ -6,6 +6,7 @@
 #include "ui/graphics.h"
 #include "ui/navigation.h"
 #include "ui/collection_art.h"
+#include "ui/views.h"
 #include "ui/ui.h"
 
 #include <malloc.h>
@@ -1138,6 +1139,7 @@ static void stopOrbitArtWorker(void) {
 }
 
 void releasePSBBNCovers(void) {
+  releaseCollectionCornerArt();
   clearOrbitCoverHandoffs();
   // Retain nearby artwork last, so a full window exceeds the reuse budget by
   // evicting distant covers rather than the selection and its moving partner.
@@ -1149,6 +1151,7 @@ void releasePSBBNCovers(void) {
 }
 
 void suspendCollectionCovers(void) {
+  releaseCollectionCornerArt();
   for (int i = 0; i < PSBBN_COVER_CACHE_COUNT; i++) {
     if (psbbnCoverTextures[i]->Vram != 0)
       gsKit_TexManager_free(gsGlobal, psbbnCoverTextures[i]);
@@ -2564,6 +2567,7 @@ void updatePSBBNCoverResidency(int flowOffset) {
 }
 
 void artCacheShutdown(void) {
+  releaseCollectionCornerArt();
   clearOrbitCoverHandoffs();
   stopClassicArtWorker();
   stopCollectionFarArtWorker(NULL, 0);

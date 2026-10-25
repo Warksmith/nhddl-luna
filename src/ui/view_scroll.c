@@ -1555,7 +1555,14 @@ static void drawBiosSystemConfiguration(uint32_t frameNowMs) {
   configRestoreState();
 }
 
+#ifdef LUNA_CAMERA_ANIMATIONS
+#include "ui/camera_transitions.h"
+#endif
+
 void drawSharedLibraryBackground(uint32_t frameNowMs) {
+#ifdef LUNA_CAMERA_ANIMATIONS
+  lunaCameraSceneBeforeBackground();
+#endif
   if (libraryBackground >= LIBRARY_BACKGROUND_AURORA &&
       libraryBackground <= LIBRARY_BACKGROUND_TEMPEST)
     drawAnimatedWallpaper(libraryBackground, frameNowMs);
@@ -1569,6 +1576,9 @@ void drawSharedLibraryBackground(uint32_t frameNowMs) {
     drawBiosSystemConfiguration(frameNowMs);
   else if (!drawAmbientOrbsBackground(frameNowMs))
     drawGlassBackground(frameNowMs);
+#ifdef LUNA_CAMERA_ANIMATIONS
+  lunaCameraSceneAfterBackground();
+#endif
 }
 
 int orbsVisualCacheIndex(int flowOffset) {

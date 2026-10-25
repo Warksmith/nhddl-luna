@@ -356,6 +356,7 @@ int udpfs_core_close(int32_t handle)
 {
     udpfs_msg_close_req_t *req = (udpfs_msg_close_req_t *)g_tx_buf;
     udpfs_msg_close_reply_t *reply = (udpfs_msg_close_reply_t *)g_rx_buf;
+    int ret;
 
     M_DEBUG("udpfs_core_close(handle=%d)\n", handle);
 
@@ -371,10 +372,14 @@ int udpfs_core_close(int32_t handle)
     req->reserved[2] = 0;
     req->handle = handle;
 
-    _request(req, sizeof(udpfs_msg_close_req_t),
-             reply, sizeof(udpfs_msg_close_reply_t));
+    ret = _request(req, sizeof(udpfs_msg_close_req_t),
+                   reply, sizeof(udpfs_msg_close_reply_t));
+    if (ret < 0)
+        return ret;
+    if ((unsigned int)ret < sizeof(*reply) || reply->msg_type != UDPFS_MSG_CLOSE_REPLY)
+        return -EIO;
 
-    return 0;
+    return reply->result;
 }
 
 /*
@@ -521,13 +526,20 @@ int udpfs_core_dread(int32_t handle, iox_stat_t *stat, char *name, int name_max)
     if (ret < 0)
         return ret;
 
-    if (reply->msg_type != UDPFS_MSG_DREAD_REPLY) {
+    if ((unsigned int)ret < sizeof(*reply) || reply->msg_type != UDPFS_MSG_DREAD_REPLY) {
         M_DEBUG("udpfs: dread: unexpected reply type 0x%02x\n", reply->msg_type);
         return -EIO;
     }
 
     if (reply->result <= 0)
         return reply->result;  /* 0 = end of dir, negative = error */
+
+    /* Reject incomplete entries rather than copying stale receive-buffer data
+     * or silently turning an oversized name into an empty library entry. */
+    if (!reply->name_len || reply->name_len > (unsigned int)ret - sizeof(*reply))
+        return -EIO;
+    if (name_max <= 0 || reply->name_len >= name_max)
+        return -ENAMETOOLONG;
 
     /* Populate stat */
     memset(stat, 0, sizeof(iox_stat_t));
@@ -540,12 +552,8 @@ int udpfs_core_dread(int32_t handle, iox_stat_t *stat, char *name, int name_max)
     memcpy(stat->mtime, reply->mtime, 8);
 
     /* Copy name */
-    if (reply->name_len > 0 && reply->name_len < name_max) {
-        memcpy(name, (char *)reply + sizeof(udpfs_msg_dread_reply_t), reply->name_len);
-        name[reply->name_len] = '\0';
-    } else if (name_max > 0) {
-        name[0] = '\0';
-    }
+    memcpy(name, (char *)reply + sizeof(*reply), reply->name_len);
+    name[reply->name_len] = '\0';
 
     return 1;
 }

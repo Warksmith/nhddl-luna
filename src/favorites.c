@@ -9,10 +9,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#define NEWLIB_PORT_AWARE
+#include <fileXio_rpc.h>
 
 static const char favoritesPath[] = "/favorites.txt";
 static const char favoritesTempPath[] = "/favorites.txt.tmp";
 static const char favoritesComplete[] = "# LUNA_FAVORITES_COMPLETE\n";
+
+static int favoriteFileMissing(const char *path) {
+  // BDM reports raw FatFs missing-file/path results instead of POSIX ENOENT.
+  // Probe the path so a read error cannot discard a complete recovery file.
+  if (!strncmp(path, "mass", 4) && path[4] >= '0' && path[4] <= '9' && path[5] == ':') {
+    iox_stat_t info;
+    int result = fileXioGetStat(path, &info);
+    return result == -4 || result == -5;
+  }
+  struct stat info;
+  return stat(path, &info) < 0 && errno == ENOENT;
+}
 
 static struct DeviceMapEntry *favoriteDevice(Target *target) {
   return target->device->metadev ? target->device->metadev : target->device;
@@ -46,7 +60,7 @@ static int readFavoriteFile(const char *path, int staged, TargetList *titles,
                              size_t flagCount) {
   FILE *file = fopen(path, "r");
   if (!file)
-    return errno == ENOENT ? -ENOENT : -EIO;
+    return favoriteFileMissing(path) ? -ENOENT : -EIO;
   char favorite[PATH_MAX + 2];
   int complete = 0, result = 0;
   while (fgets(favorite, sizeof(favorite), file)) {
