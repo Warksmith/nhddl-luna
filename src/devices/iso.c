@@ -32,8 +32,9 @@ typedef struct TitleIDCache {
   CacheEntry *entries; // Pointer to cache entry array
 } TitleIDCache;
 
-int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device);
-int processTitleID(TargetList *result, struct DeviceMapEntry *device);
+int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device,
+             const char *path);
+int processTitleID(TargetList *result, struct DeviceMapEntry *device, int completeScan);
 
 int storeTitleIDCache(TargetList *list, struct DeviceMapEntry *device);
 int loadTitleIDCache(TitleIDCache *cache, struct DeviceMapEntry *device);
@@ -50,7 +51,7 @@ const char *ignoredDirs[] = {
 static int curRecursionLevel = 1;
 
 // Scans given storage device and appends valid launch candidates to TargetList
-// Returns 0 if successful, non-zero if no targets were found or an error occurs
+// Keep usable games when a folder or image cannot be read.
 int findISO(TargetList *result, struct DeviceMapEntry *device) {
   DIR *directory;
 
@@ -65,41 +66,36 @@ int findISO(TargetList *result, struct DeviceMapEntry *device) {
     return -EIO;
   }
 
-  char previousDirectory[PATH_MAX + 1];
-  if (!getcwd(previousDirectory, sizeof(previousDirectory)) || chdir(device->mountpoint)) {
-    closedir(directory);
-    return -EIO;
-  }
-  int scanResult = _findISO(directory, result, device);
+  int scanResult = _findISO(directory, result, device, device->mountpoint);
   // PS2SDK can return the closed descriptor on success; only negatives fail.
   if (closedir(directory) < 0 && !scanResult)
-    scanResult = -EIO;
-  if (chdir(previousDirectory) && !scanResult)
-    scanResult = -EIO;
-  if (scanResult)
+    scanResult = TITLE_SCAN_PARTIAL;
+  if (scanResult < 0)
     return scanResult;
 
   if (result->total == 0) {
-    return -ENOENT;
+    return scanResult ? scanResult : -ENOENT;
   }
 
   // Get title IDs for each found title
-  int metadataResult = processTitleID(result, device);
-  if (metadataResult) return metadataResult;
+  int metadataResult = processTitleID(result, device, scanResult == 0);
+  if (metadataResult < 0) return metadataResult;
+  if (metadataResult == TITLE_SCAN_PARTIAL) scanResult = TITLE_SCAN_PARTIAL;
 #ifdef LUNA_ENABLE_PSXCORE
   metadataResult = lunaPsxGroupTargets(result);
   if (metadataResult) return metadataResult;
 #endif
 
   if (result->first == NULL) {
-    return -ENOENT;
+    return scanResult ? scanResult : -ENOENT;
   }
 
-  return 0;
+  return scanResult;
 }
 
 // Searches rootpath and adds discovered ISOs to TargetList
-int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) {
+int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device,
+             const char *path) {
   if (directory == NULL)
     return -EIO;
 
@@ -107,11 +103,9 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
   struct dirent *entry;
   char *fileext;
   char titlePath[PATH_MAX + 1];
-  if (!getcwd(titlePath, PATH_MAX + 1)) { // Initialize titlePath with current working directory
-    uiSplashError("Failed to get cwd\n");
-    return -EIO;
-  }
-  int cwdLen = strlen(titlePath);     // Get the length of base path string
+  int cwdLen = snprintf(titlePath, sizeof(titlePath), "%s", path);
+  if (cwdLen <= 0 || (size_t)cwdLen >= sizeof(titlePath))
+    return -ENAMETOOLONG;
   if (titlePath[cwdLen - 1] != '/') { // Add path separator if cwd doesn't have one
     if ((size_t)cwdLen >= sizeof(titlePath) - 1)
       return -ENAMETOOLONG;
@@ -126,14 +120,14 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
     errno = 0;
     entry = readdir(directory);
     if (!entry) {
-      if (errno) scanResult = -EIO;
+      if (errno) scanResult = TITLE_SCAN_PARTIAL;
       break;
     }
     // Reset titlePath by ending string on base path
     titlePath[cwdLen] = '\0';
     if (strlen(entry->d_name) > sizeof(titlePath)-1-(size_t)cwdLen) {
-      scanResult = -ENAMETOOLONG;
-      goto done;
+      scanResult = TITLE_SCAN_PARTIAL;
+      continue;
     }
 
     // Ignore .files and directories
@@ -145,7 +139,7 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
     if (type == DT_UNKNOWN) {
       struct stat info;
       snprintf(titlePath + cwdLen, sizeof(titlePath) - cwdLen, "%s", entry->d_name);
-      if (stat(titlePath, &info) < 0) { scanResult = -EIO; goto done; }
+      if (stat(titlePath, &info) < 0) { scanResult = TITLE_SCAN_PARTIAL; continue; }
       type = S_ISDIR(info.st_mode) ? DT_DIR : DT_REG;
       titlePath[cwdLen] = '\0';
     }
@@ -164,27 +158,22 @@ int _findISO(DIR *directory, TargetList *result, struct DeviceMapEntry *device) 
           goto next;
       }
 
-      // Generate full path, open dir and change cwd
+      // Recurse using full paths, independently of the launcher's working directory.
       strcat(titlePath, entry->d_name);
       DIR *d = opendir(titlePath);
       if (d == NULL) {
-        scanResult = -EIO;
-        goto done;
-      }
-      if (chdir(titlePath)) {
-        closedir(d);
-        scanResult = -EIO;
-        goto done;
+        scanResult = TITLE_SCAN_PARTIAL;
+        continue;
       }
       // Process inner directory recursively
-      scanResult = _findISO(d, result, device);
-      if (closedir(d) < 0 && !scanResult)
-        scanResult = -EIO;
-      titlePath[cwdLen] = '\0';
-      if (chdir(titlePath) && !scanResult)
-        scanResult = -EIO;
-      if (scanResult)
+      int childResult = _findISO(d, result, device, titlePath);
+      if (closedir(d) < 0 && childResult >= 0)
+        childResult = TITLE_SCAN_PARTIAL;
+      if (childResult == -ENOMEM) {
+        scanResult = childResult;
         goto done;
+      }
+      if (childResult) scanResult = TITLE_SCAN_PARTIAL;
 
     next:
       break;
@@ -233,7 +222,7 @@ done:
 }
 
 // Fills in title ID for every entry in the list
-int processTitleID(TargetList *result, struct DeviceMapEntry *device) {
+int processTitleID(TargetList *result, struct DeviceMapEntry *device, int completeScan) {
   if (result->total == 0)
     return 0;
 
@@ -257,7 +246,7 @@ int processTitleID(TargetList *result, struct DeviceMapEntry *device) {
   // For every entry in target list, try to get title ID from cache
   // If cache doesn't have title ID for the path,
   // get it from ISO
-  int cacheMisses = 0;
+  int cacheMisses = 0, scanResult = 0;
   char *titleID = NULL;
   Target *curTarget = result->first;
   while (curTarget != NULL) {
@@ -272,8 +261,7 @@ int processTitleID(TargetList *result, struct DeviceMapEntry *device) {
       char id[12];
       const char *error = lunaPsxDiscInfo(curTarget->fullPath,id);
       if (error && (!strcmp(error, "disc-open") || !strcmp(error, "disc-read"))) {
-        freeTitleCache(cache);
-        return -EIO;
+        scanResult = TITLE_SCAN_PARTIAL;
       }
       if (error) {
         curTarget=freeTarget(result,curTarget); continue;
@@ -296,13 +284,13 @@ int processTitleID(TargetList *result, struct DeviceMapEntry *device) {
       cacheMisses++;
       curTarget->id = getTitleID(curTarget->fullPath);
       if (curTarget->id == NULL) {
-        // Invalid images may be skipped; I/O/allocation failures invalidate
-        // this rescan so storageRefresh can retain the previous library.
+        // A bad image must not hide other readable games on the device.
         int error = errno;
-        if (error != EINVAL) {
+        if (error == ENOMEM) {
           freeTitleCache(cache);
-          return error == ENOMEM ? -ENOMEM : -EIO;
+          return -ENOMEM;
         }
+        if (error != EINVAL) scanResult = TITLE_SCAN_PARTIAL;
         curTarget = freeTarget(result, curTarget);
         continue;
       }
@@ -312,10 +300,11 @@ int processTitleID(TargetList *result, struct DeviceMapEntry *device) {
   }
   freeTitleCache(cache);
 
-  if ((cacheMisses > 0) || (isCacheUpdateNeeded)) {
+  // Never replace a complete cache with an incomplete scan.
+  if (completeScan && !scanResult && ((cacheMisses > 0) || isCacheUpdateNeeded)) {
     (void)storeTitleIDCache(result, device);
   }
-  return 0;
+  return scanResult;
 }
 
 //
