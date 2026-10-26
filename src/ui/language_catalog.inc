@@ -1,4 +1,5 @@
 // UI-owned English keys with Spanish and Brazilian Portuguese translations.
+  {"Unterminated block comment", "Comentario de bloque sin cerrar", "Comentário de bloco não terminado"},
   {"%d changed or missing selections cleared.", "Se borraron %d selecciones modificadas o ausentes.", "%d seleções alteradas ou ausentes foram removidas."},
   {"%d changed or missing selections cleared. Press Start to save.", "Se borraron %d selecciones modificadas o ausentes. Pulsa Start para guardar.", "%d seleções alteradas ou ausentes foram removidas. Pressione Start para salvar."},
   {"%d completed; %s. Queue kept.", "%d completados; %s. Cola conservada.", "%d concluídos; %s. Fila mantida."},

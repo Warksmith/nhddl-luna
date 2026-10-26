@@ -47,6 +47,25 @@ static uint64_t hashByte(uint64_t hash, unsigned char byte) {
   return (hash ^ byte) * UINT64_C(1099511628211);
 }
 
+static void stripComments(char *text, int *blockComment) {
+  char *out = text;
+  while (*text) {
+    if (*blockComment) {
+      if (text[0] == '*' && text[1] == '/') {
+        *blockComment = 0;
+        text += 2;
+      } else text++;
+    } else if (text[0] == '/' && text[1] == '*') {
+      *blockComment = 1;
+      *out++ = ' ';
+      text += 2;
+    } else if (*text == '#' || (text[0] == '/' && text[1] == '/')) {
+      break;
+    } else *out++ = *text++;
+  }
+  *out = 0;
+}
+
 static int readCheatLine(FILE *stream, char *buffer, size_t size, int *bytes,
                           const char **problem) {
   size_t used = 0;
@@ -114,7 +133,7 @@ int lunaCheatParse(FILE *stream, LunaCheatFile *file, char *error, size_t size) 
     return fail(error, size, 0, "Not enough memory for cheats");
   }
   char buffer[512];
-  int line = 0, bytes = 0, current = -1;
+  int line = 0, bytes = 0, current = -1, blockComment = 0;
   const char *problem = NULL;
   while (1) {
     int read = readCheatLine(stream, buffer, sizeof(buffer), &bytes, &problem);
@@ -124,9 +143,7 @@ int lunaCheatParse(FILE *stream, LunaCheatFile *file, char *error, size_t size) 
     size_t length = strlen(buffer);
     char *s = buffer;
     if (line == 1 && length >= 3 && !memcmp(s, "\xef\xbb\xbf", 3)) s += 3;
-    char *comment = strchr(s, '#'), *slash = strstr(s, "//");
-    if (slash && (!comment || slash < comment)) comment = slash;
-    if (comment) *comment = 0;
+    stripComments(s, &blockComment);
     s = trim(s);
     if (!*s) continue;
     LunaCheatPair pair;
@@ -179,6 +196,7 @@ int lunaCheatParse(FILE *stream, LunaCheatFile *file, char *error, size_t size) 
     file->entries[current].pairCount++;
   }
   if (!problem && ferror(stream)) problem = "Could not read cheat file";
+  if (!problem && blockComment) problem = "Unterminated block comment";
   if (!problem && (!file->entryCount || !file->entries[file->entryCount - 1].pairCount))
     problem = "Cheat file has no codes or ends with an empty entry";
   if (!problem) {
@@ -208,6 +226,21 @@ int lunaCheatParse(FILE *stream, LunaCheatFile *file, char *error, size_t size) 
   if (problem) {
     lunaCheatFileFree(file);
     return fail(error, size, line, problem);
+  }
+  // Some OPL files put every patch under Mastercode. With no optional entry,
+  // nothing could be selected, so the payload stayed empty. Expose each mixed
+  // block as one choice; separate master/enable blocks keep their usual role.
+  int hasOptional = 0;
+  for (int e = 0; e < file->entryCount; e++)
+    if (!file->entries[e].required) hasOptional = 1;
+  for (int e = 0; !hasOptional && e < file->entryCount; e++) {
+    LunaCheatEntry *entry = &file->entries[e];
+    for (int p = 0; p < entry->pairCount; p++) {
+      if ((file->pairs[entry->firstPair + p].address & 0xfe000000U) != 0x90000000U) {
+        entry->required = 0;
+        break;
+      }
+    }
   }
   return 0;
 }

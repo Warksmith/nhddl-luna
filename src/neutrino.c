@@ -296,6 +296,10 @@ int findNeutrinoELF(char *cwdPath) {
 __attribute__((section("._launch_args"))) // Place launchArgs in the _launch_args memory section
 __attribute__((aligned(16)))              // Align the pointer
 static char launchArgs[LAUNCH_ARGS_BYTES] __attribute__((aligned(16)));
+__attribute__((section("._launch_args")))
+static char launchReference[64];
+__attribute__((section("._launch_args")))
+static char *launchReferenceArgv[2];
 
 void *lunaElfLaunchWorkspace(size_t bytes) {
   return bytes <= sizeof(launchArgs) ? launchArgs : NULL;
@@ -339,6 +343,21 @@ int launchELF(int argc, char *argv[]) {
     largv[i] = argStart;
     argStart += strlen(largv[i]) + 1;
   }
+  // The kernel and ps2-packer startup reserve only 16 argv slots / 256 bytes.
+  // Keep longer lists resident and let the paired Neutrino copy them in main.
+  int execArgc = argc;
+  char **execArgv = largv;
+  size_t bytes = (size_t)(argStart - launchArgs);
+  if (argc > 16 || bytes - argc * sizeof(char *) > 256) {
+    strcpy(launchReference, "neutrino.elf");
+    snprintf(launchReference + 13, sizeof(launchReference) - 13,
+             "-luna-args=%08x:%08x:%08x",
+             (unsigned int)(uintptr_t)launchArgs, (unsigned int)bytes, (unsigned int)argc);
+    launchReferenceArgv[0] = launchReference;
+    launchReferenceArgv[1] = launchReference + 13;
+    execArgc = 2;
+    execArgv = launchReferenceArgv;
+  }
 
   // The rest of the code doesn't use libc functions
   // Wipe NHDDL memory
@@ -352,7 +371,7 @@ int launchELF(int argc, char *argv[]) {
   FlushCache(WRITEBACK_DCACHE);
   FlushCache(INVALIDATE_ICACHE);
   TerminateLibrary();
-  _ExecPS2((void *)elfdata.epc, (void *)elfdata.gp, argc, largv);
+  _ExecPS2((void *)elfdata.epc, (void *)elfdata.gp, execArgc, execArgv);
   KExit(-1);
   __builtin_trap();
 }
