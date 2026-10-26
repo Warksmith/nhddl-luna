@@ -660,10 +660,10 @@ static void drawGameVMCRows(OptionsMenuState *state, int baseX,
   const int enabled = gameVMCEnabled(state->titleArguments);
   const int visibleRows = enabled ? 4 : 3;
   const char *const labels[] = {
-      lunaText("VMC slot 1"), lunaText("VMC slot 2"), lunaText("Create new card"), lunaText("Disable virtual cards")};
+      lunaText("VMC slot 1"), lunaText("VMC slot 2"), lunaText("Card assignment"), lunaText("Disable virtual cards")};
   const char *const values[] = {
       state->gameOptions.vmcSlotLabel[0],
-      state->gameOptions.vmcSlotLabel[1], "8 MB", NULL};
+      state->gameOptions.vmcSlotLabel[1], NULL, NULL};
   int selectorY = optionsSelectorY(&state->selector, state->page,
       GAME_SECTION_COUNT + GAME_MEMORY_CARDS * 5 + state->selectedGameRow,
       firstY + state->selectedGameRow * rowStep);
@@ -674,7 +674,7 @@ static void drawGameVMCRows(OptionsMenuState *state, int baseX,
                        labels[row], values[row]);
   const char *description = state->vmcStatus[0] ? state->vmcStatus :
       state->selectedGameRow == 2 ?
-          lunaText("Create an 8 MB card on this game's drive.") :
+          lunaText("Create cards for this game, choose existing cards or use shared cards.") :
       state->selectedGameRow == 3 ?
           lunaText("Use physical cards in both slots for this game.") :
           lunaText(gameRowDescriptions[LUNA_GAME_VMC_SLOT1 + state->selectedGameRow]);
@@ -1080,7 +1080,7 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
                      lunaText("All discs use the same memory cards. Swapping controls are shown before launch."));
     } else {
 #ifdef LUNA_ENABLE_PSXCORE
-    const char *labels[] = {"Card behavior", "Slot 1", "Slot 2", "Manage cards"};
+    const char *labels[] = {"Card assignment", "Slot 1", "Slot 2", "Manage cards"};
     char setLabel[28]; snprintf(setLabel, sizeof(setLabel), "%.24s%s", state->ps1SetName,
                                strlen(state->ps1SetName) > 24 ? "..." : "");
     const char *values[] = {setLabel, state->ps1SlotStatus[0], state->ps1SlotStatus[1], NULL};
@@ -1295,155 +1295,8 @@ static int optionsGlobalDirty(int pendingBackground, int pendingGlassColor,
          pendingLogo != logo || pendingCore != core;
 }
 
-#define VMC_PICKER_MAX_FILES 128
-
-static int gameVMCDirectory(Target *target, char *path, size_t pathSize) {
-  const char *mountpoint = storageVMCRoot(target->device);
-  if (!mountpoint || !mountpoint[0]) return 0;
-  size_t mountLength = strlen(mountpoint);
-  int written = snprintf(path, pathSize, "%s%sVMC", mountpoint,
-                         mountLength > 0 && mountpoint[mountLength - 1] == '/' ?
-                             "" : "/");
-  return written >= 0 && (size_t)written < pathSize;
-}
-
-static void drawGameVMCProgress(int percent, void *context) {
-  char message[64];
-  snprintf(message, sizeof(message), lunaText("Creating card: %d%%"), percent);
-  gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
-  drawOptionsSheet();
-  const int baseX = keepoutArea + 10;
-  drawOptionsSection(optionsHeadingY(),
-                     lunaText("Virtual memory cards"), 0);
-  drawTextWindow(baseX, gsGlobal->Height / 2,
-                 gsGlobal->Width - baseX, 0, 0, HeaderTextColor,
-                 ALIGN_HCENTER, message);
-  drawTextWindow(baseX, gsGlobal->Height - footerHeight - getFontLineHeight(),
-                 gsGlobal->Width - baseX, 0, 0, HeaderTextColor,
-                 ALIGN_HCENTER, lunaText("Please wait until creation finishes"));
-  gsKit_set_test(gsGlobal, GS_ZTEST_ON);
-  presentOptionsFrame();
-  (void)context;
-}
-
-static int createNextGameVMC(OptionsMenuState *state, char *created,
-                             size_t createdSize) {
-  char directory[PATH_MAX + 1];
-  struct stat info;
-  if (!gameVMCDirectory(state->target, directory, sizeof(directory)))
-    return 0;
-  if (stat(directory, &info) != 0 && mkdir(directory, 0777) != 0)
-    return 0;
-  for (int index = 1; index <= 999; index++) {
-    char name[24];
-    snprintf(name, sizeof(name), "LUNA_%03d.bin", index);
-    int written = snprintf(created, createdSize, "%s/%s", directory, name);
-    if (written < 0 || (size_t)written >= createdSize)
-      return 0;
-    if (stat(created, &info) == 0)
-      continue;
-    drawGameVMCProgress(0, state);
-    return lunaCreateVMC8(created, drawGameVMCProgress, state) == 0;
-  }
-  return 0;
-}
-
-static int vmcFileCompare(const void *left, const void *right) {
-  return strcmp(*(const char *const *)left, *(const char *const *)right);
-}
-
-static int vmcImageFilename(const char *name) {
-  const char *extension = strrchr(name, '.');
-  return extension != NULL && strlen(extension) == 4 &&
-         tolower((unsigned char)extension[1]) == 'b' &&
-         tolower((unsigned char)extension[2]) == 'i' &&
-         tolower((unsigned char)extension[3]) == 'n' &&
-         extension[4] == '\0';
-}
-
-static int uiVMCPickerLoop(Target *target, ArgumentList *arguments,
-                           LunaGameOptions *gameOptions, int slot) {
-  char directoryPath[PATH_MAX + 1];
-  char *files[VMC_PICKER_MAX_FILES];
-  int count = 0;
-  int selected = 0;
-  int changed = 0;
-  int supported = gameVMCDirectory(target, directoryPath, sizeof(directoryPath));
-  DIR *directory = supported ? opendir(directoryPath) : NULL;
-  if (directory != NULL) {
-    struct dirent *entry;
-    while (count < VMC_PICKER_MAX_FILES && (entry = readdir(directory)) != NULL) {
-      if (entry->d_type == DT_DIR || !vmcImageFilename(entry->d_name))
-        continue;
-      files[count] = strdup(entry->d_name);
-      if (files[count] == NULL)
-        break;
-      count++;
-    }
-    closedir(directory);
-    qsort(files, count, sizeof(files[0]), vmcFileCompare);
-  }
-
-  while (1) {
-    gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
-    drawOptionsSheet();
-    const int baseX = keepoutArea + 10;
-    const int lineHeight = getFontLineHeight();
-    const int menuTop = optionsMenuTop();
-    const int menuBottom = gsGlobal->Height - footerHeight - lineHeight;
-    const int rowStep = lineHeight + lineHeight / 3;
-    const int rowRight = gsGlobal->Width - baseX;
-    const int focusY = menuTop + selected * rowStep;
-    const int scrollOffset = focusY + lineHeight > menuBottom
-                                 ? focusY + lineHeight - menuBottom : 0;
-    drawOptionsSection(optionsHeadingY(),
-                       slot == 0 ? lunaText("VMC slot 1") : lunaText("VMC slot 2"), 0);
-    drawTextWindow(baseX, menuTop - lineHeight, gsGlobal->Width - baseX,
-                   menuTop, 0, HeaderTextColor, ALIGN_HCENTER,
-                   gameOptions->vmcSlotLabel[slot]);
-    for (int index = 0; index <= count; index++) {
-      int y = menuTop + index * rowStep - scrollOffset;
-      if (y < menuTop || y + lineHeight > menuBottom)
-        continue;
-      drawOptionsTextRow(baseX, y, rowRight,
-                         index == selected, y,
-                         index == 0 ? lunaText("Physical card") : files[index - 1], NULL);
-    }
-    drawTextWindow(baseX + 18, menuBottom, gsGlobal->Width - baseX,
-                   gsGlobal->Height - footerHeight, 0, HeaderTextColor,
-                   ALIGN_LEFT, !supported ? lunaText("File cards need enabled local storage. Use a physical card.")
-                               : count ? lunaText("Select a card from /VMC on this drive.")
-                                     : lunaText("Create a card from the Virtual memory cards page."));
-    const ButtonPrompt assign[] = {
-        {ICON_CROSS, lunaText("Assign")}, {ICON_TRIANGLE, lunaText("Back")}};
-    drawPromptBar(baseX + 18, gsGlobal->Height - footerHeight,
-                  gsGlobal->Width - baseX, gsGlobal->Height, 0,
-                  HeaderTextColor, (PromptBar){NULL, assign, 2});
-    gsKit_set_test(gsGlobal, GS_ZTEST_ON);
-    presentOptionsFrame();
-
-    int input = waitForInput(-1);
-    if (input & PAD_TRIANGLE)
-      break;
-    if (input & PAD_UP)
-      selected = (selected + count) % (count + 1);
-    else if (input & PAD_DOWN)
-      selected = (selected + 1) % (count + 1);
-    else if (input & (PAD_CROSS | PAD_CIRCLE)) {
-      char path[PATH_MAX + 1];
-      if (selected == 0) {
-        path[0] = '\0';
-      } else if (snprintf(path, sizeof(path), "%s/%s", directoryPath,
-                          files[selected - 1]) >= sizeof(path)) {
-        continue;
-      }
-      changed = lunaGameOptionsSetVMC(gameOptions, arguments, slot, path);
-      break;
-    }
-  }
-  for (int index = 0; index < count; index++)
-    free(files[index]);
-  return changed;
+static int uiVMCPickerLoop(Target *target,ArgumentList *arguments,LunaGameOptions *options,int slot) {
+  return uiVmcPs2Slot(target,arguments,options,slot);
 }
 
 static int handleOrbsInput(OptionsMenuState *state, int input) {
@@ -1799,7 +1652,8 @@ static int editGameInput(OptionsMenuState *state, int input) {
       int changed = 0;
       if (!state->selectedGameRow) changed = uiPs1VmcPolicy(state->target, &state->ps1Cards);
       else {
-        uiPs1VmcManage(&state->ps1Cards, state->selectedGameRow <= 2 ? state->selectedGameRow - 1 : -1);
+        if(state->selectedGameRow<=2)changed=uiPs1VmcSlot(state->target,&state->ps1Cards,state->selectedGameRow-1);
+        else uiPs1VmcManage(&state->ps1Cards,-1);
       }
       if (changed) {
         state->ps1CardsChanged = 1; state->saveError = 0;
@@ -1900,27 +1754,15 @@ static int editGameInput(OptionsMenuState *state, int input) {
   if (state->gameSection == GAME_MEMORY_CARDS &&
       (input & (PAD_CROSS | PAD_CIRCLE))) {
     if (state->selectedGameRow == 2) {
-      char created[PATH_MAX + 1];
-      if (!storageVMCRoot(state->target->device)) {
-        snprintf(state->vmcStatus, sizeof(state->vmcStatus),
-                 lunaText("File cards need enabled local storage. MMCE switches cards automatically when enabled."));
-        return 0;
+      if(uiVmcPs2Policy(state->target,state->titleArguments,&state->gameOptions)) {
+        state->titleArgumentsChanged=1;state->saveError=0;
+        snprintf(state->vmcStatus,sizeof(state->vmcStatus),"%s",lunaText("Card selection updated."));
       }
-      if (createNextGameVMC(state, created, sizeof(created)))
-        snprintf(state->vmcStatus, sizeof(state->vmcStatus),
-                 lunaText("Created %.24s. Select a slot to assign it."),
-                 strrchr(created, '/') + 1);
-      else
-        snprintf(state->vmcStatus, sizeof(state->vmcStatus),
-                 lunaText("Could not create card. Check drive and free space."));
       return 0;
     }
     if (state->selectedGameRow == 3) {
       if (gameVMCEnabled(state->titleArguments)) {
-        if (lunaGameOptionsSetVMC(&state->gameOptions,
-                                  state->titleArguments, 0, "") &&
-            lunaGameOptionsSetVMC(&state->gameOptions,
-                                  state->titleArguments, 1, "")) {
+        if (lunaGameOptionsSetVMCPair(&state->gameOptions,state->titleArguments,"","")) {
           state->titleArgumentsChanged = 1;
           state->selectedGameRow = 0;
           state->selector.initialized = 0;

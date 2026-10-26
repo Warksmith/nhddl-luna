@@ -4,6 +4,7 @@
 #include "luna_psxcore_discset.h"
 #include "devices/devices.h"
 #include "storage.h"
+#include "vmc_storage.h"
 #include "psxcore_file.h"
 #include "psxcore_hash.h"
 #include "psxcore_boot.h"
@@ -164,6 +165,7 @@ static int baseValid(const char *base) {
 }
 const char *lunaPsxVmcPaths(const char *base, char cards[2][NP_FILE_PATH_BYTES]) {
   if (!baseValid(base)) return "The card folder is unsupported.";
+  memset(cards,0,2*NP_FILE_PATH_BYTES);
   int named = strcmp(base+6,"/POPS/ps1emu") != 0;
   for (unsigned i=0;i<2;++i) snprintf(cards[i],NP_FILE_PATH_BYTES,"%s/card%u%s",base+6,i,named?".vmc":"");
   return np_file_card_pair_valid(cards) ? NULL : "The selected card paths are invalid.";
@@ -180,13 +182,30 @@ const char *lunaPsxVmcBase(const LunaPsxVmcSettings *s, char base[128]) {
   return NULL;
 }
 
+const char *lunaPsxVmcResolve(const LunaPsxVmcSettings *s,char root[8],char cards[2][NP_FILE_PATH_BYTES]) {
+  if(s->mode==LUNA_PS1_CARDS_SLOTS) {
+    if(s->key[0] || !np_file_card_pair_valid(s->cards))return "The independent card selection is invalid.";
+    const char *error=lunaPsxVmcFindVolume(s->volume,root);if(error)return error;
+    memcpy(cards,s->cards,sizeof(s->cards));return NULL;
+  }
+  char base[128];const char *error=lunaPsxVmcBase(s,base);if(error)return error;
+  snprintf(root,8,"%.6s",base);return lunaPsxVmcPaths(base,cards);
+}
+
 // Separate namespace: old hash-keyed ownership and settings files are ignored.
 typedef struct {
   uint32_t magic, version, mode;
   char gamePath[NP_FILE_PATH_BYTES], key[49];
   unsigned char volume[16], reserved[3], sha256[32];
+} VmcSelectionV1;
+_Static_assert(sizeof(VmcSelectionV1) == 368, "LUNA legacy card selection layout");
+typedef struct {
+  uint32_t magic, version, mode;
+  char gamePath[NP_FILE_PATH_BYTES], key[49];
+  unsigned char volume[16], reserved[3];
+  char cards[2][NP_FILE_PATH_BYTES];
+  unsigned char sha256[32];
 } VmcSelection;
-_Static_assert(sizeof(VmcSelection) == 368, "LUNA card selection layout");
 static void settingsPath(const LunaPsxVmcSettings *s, char path[160]) {
   unsigned char hash[32]; char hex[65];
   np_boot_sha256(s->gamePath,strlen(s->gamePath)+1,hash); hexDigest(hash,hex);
@@ -194,13 +213,27 @@ static void settingsPath(const LunaPsxVmcSettings *s, char path[160]) {
 }
 static const char *selectionCheck(const VmcSelection *r, const LunaPsxVmcSettings *s) {
   unsigned char hash[32]; np_boot_sha256(r,offsetof(VmcSelection,sha256),hash);
-  if (r->magic != 0x33434d4c || r->version != 1 || r->mode > LUNA_PS1_CARDS_CUSTOM ||
+  if (r->magic != 0x33434d4c || r->version != 2 || r->mode > LUNA_PS1_CARDS_SLOTS ||
       r->reserved[0] || r->reserved[1] || r->reserved[2] || memcmp(hash,r->sha256,32) ||
       !memchr(r->gamePath,0,sizeof(r->gamePath)) || strcmp(r->gamePath,s->gamePath) ||
       !memchr(r->key,0,sizeof(r->key))) return "The memory card selection is invalid.";
   if (r->mode == LUNA_PS1_CARDS_DEFAULT ? r->key[0] || np_file_volume_id_present(r->volume) :
-      !lunaPsxVmcKeyValid(r->key) || !np_file_volume_id_present(r->volume)) return "The memory card selection is invalid.";
+      !np_file_volume_id_present(r->volume) || (r->mode==LUNA_PS1_CARDS_CUSTOM ?
+      !lunaPsxVmcKeyValid(r->key) : r->key[0] || !np_file_card_pair_valid(r->cards))) return "The memory card selection is invalid.";
+  if(r->mode!=LUNA_PS1_CARDS_SLOTS)for(unsigned i=0;i<sizeof(r->cards);++i)
+    if(((const unsigned char *)r->cards)[i])return "The memory card selection is invalid.";
   return NULL;
+}
+static const char *readSelection(const char *path,VmcSelection *record,const LunaPsxVmcSettings *s) {
+  iox_stat_t st;if(statPath(path,&st)<0)return "Cannot read the card selection.";
+  if(!st.hisize && st.size==sizeof(VmcSelectionV1)) {
+    VmcSelectionV1 old;unsigned char hash[32];const char *error=readExact(path,&old,sizeof(old));if(error)return error;
+    np_boot_sha256(&old,offsetof(VmcSelectionV1,sha256),hash);
+    if(old.version!=1 || old.mode>LUNA_PS1_CARDS_CUSTOM || memcmp(hash,old.sha256,32))return "The legacy card selection is invalid.";
+    memset(record,0,sizeof(*record));memcpy(record,&old,offsetof(VmcSelectionV1,sha256));record->version=2;
+    np_boot_sha256(record,offsetof(VmcSelection,sha256),record->sha256);
+  } else {const char *error=readExact(path,record,sizeof(*record));if(error)return error;}
+  return selectionCheck(record,s);
 }
 const char *lunaPsxVmcLoad(Target *target, LunaPsxVmcSettings *s, LunaPsxVmcProgress progress) {
   (void)progress; memset(s,0,sizeof(*s));
@@ -220,27 +253,27 @@ const char *lunaPsxVmcLoad(Target *target, LunaPsxVmcSettings *s, LunaPsxVmcProg
         Target disc=*target;disc.fullPath=member;disc.discs=NULL;
         LunaPsxVmcSettings choice;const char *error=lunaPsxVmcLoad(&disc,&choice,progress);if(error)return error;
         if(!i)first=choice;
-        else if(choice.mode!=first.mode || strcmp(choice.key,first.key) || memcmp(choice.volume,first.volume,16))
+        else if(choice.mode!=first.mode || strcmp(choice.key,first.key) || memcmp(choice.volume,first.volume,16) || memcmp(choice.cards,first.cards,sizeof(choice.cards)))
           return "Discs use different cards. Reset this set's selection, then choose its card pair.";
       }
-      if(target->discs->count) {s->mode=first.mode;memcpy(s->key,first.key,sizeof(s->key));memcpy(s->volume,first.volume,16);}
+      if(target->discs->count) {s->mode=first.mode;memcpy(s->key,first.key,sizeof(s->key));memcpy(s->volume,first.volume,16);memcpy(s->cards,first.cards,sizeof(s->cards));}
     }
     return NULL;
   }
-  VmcSelection record; const char *error = readExact(path,&record,sizeof(record));
-  if (!error) error = selectionCheck(&record,s);
+  VmcSelection record; const char *error = readSelection(path,&record,s);
   if (error) return error;
-  s->mode=record.mode; memcpy(s->key,record.key,sizeof(s->key)); memcpy(s->volume,record.volume,16);
+  s->mode=record.mode; memcpy(s->key,record.key,sizeof(s->key)); memcpy(s->volume,record.volume,16);memcpy(s->cards,record.cards,sizeof(s->cards));
   return NULL;
 }
 const char *lunaPsxVmcSave(const LunaPsxVmcSettings *s) {
   if (!rootValid(s->gameRoot) || !np_file_path_valid(s->gamePath,sizeof(s->gamePath),1)) return "The game path is invalid.";
-  VmcSelection record={0}; record.magic=0x33434d4c; record.version=1; record.mode=s->mode;
+  VmcSelection record={0}; record.magic=0x33434d4c; record.version=2; record.mode=s->mode;
   memcpy(record.key,s->key,sizeof(record.key)); memcpy(record.volume,s->volume,16);
   memcpy(record.gamePath,s->gamePath,sizeof(record.gamePath));
+  if(s->mode==LUNA_PS1_CARDS_SLOTS)memcpy(record.cards,s->cards,sizeof(record.cards));
   np_boot_sha256(&record,offsetof(VmcSelection,sha256),record.sha256);
   const char *error=selectionCheck(&record,s); if (error) return error;
-  if (s->mode==LUNA_PS1_CARDS_CUSTOM) { error=lunaPsxVmcPrepare(s,0); if(error)return error; }
+  if (s->mode!=LUNA_PS1_CARDS_DEFAULT) { error=lunaPsxVmcPrepare(s,0); if(error)return error; }
   char path[160], stage[168], previous[168];
   snprintf(path,sizeof(path),"%s/POPS",s->gameRoot); error=directory(path); if(error)return error;
   snprintf(path,sizeof(path),"%s/POPS/CARD_SELECTIONS",s->gameRoot); error=directory(path); if(error)return error;
@@ -248,7 +281,7 @@ const char *lunaPsxVmcSave(const LunaPsxVmcSettings *s) {
   if (!missing(stage)) return "The card selection needs recovery.";
   if (!missing(previous)) {
     VmcSelection old;
-    if (readExact(previous,&old,sizeof(old)) || selectionCheck(&old,s) || missing(path) || fileXioRemove(previous)<0)
+    if (readSelection(previous,&old,s) || missing(path) || fileXioRemove(previous)<0)
       return "The previous card selection needs recovery.";
   }
   error=writeFresh(stage,&record,sizeof(record)); if(error)return error;
@@ -270,7 +303,7 @@ const char *lunaPsxVmcReset(Target *target) {
   if(target->discs) {
     // Persist an explicit default after resolving a migration conflict; never
     // rewrite any member's old selection or its memory-card images.
-    s.mode=LUNA_PS1_CARDS_DEFAULT;memset(s.key,0,sizeof(s.key));memset(s.volume,0,16);
+    s.mode=LUNA_PS1_CARDS_DEFAULT;memset(s.key,0,sizeof(s.key));memset(s.volume,0,16);memset(s.cards,0,sizeof(s.cards));
     return lunaPsxVmcSave(&s);
   }
   return NULL;
@@ -352,6 +385,15 @@ static void cardFrame(unsigned frame,unsigned char p[128]) {
   for(unsigned i=0;i<127;++i)p[127]^=p[i];
 }
 const char *lunaPsxVmcPrepare(const LunaPsxVmcSettings *s,int create) {
+  if(s->mode==LUNA_PS1_CARDS_SLOTS) {
+    char root[8],cards[2][NP_FILE_PATH_BYTES],path[LUNA_VMC_PATH];
+    const char *error=lunaPsxVmcResolve(s,root,cards);if(error)return error;
+    for(unsigned i=0;i<2;++i) {
+      snprintf(path,sizeof(path),"%s%s",root,cards[i]);
+      error=lunaVmcReady(path,LUNA_VMC_PS1);if(error)return error;
+    }
+    return NULL;
+  }
   char base[128], paths[2][NP_FILE_PATH_BYTES], path[288];
   const char *error=lunaPsxVmcBase(s,base); if(error)return error;
   error=checkRecovery(base); if(error)return error;
@@ -359,7 +401,7 @@ const char *lunaPsxVmcPrepare(const LunaPsxVmcSettings *s,int create) {
   int absentSlots[2]; unsigned char hash[32];
   for(unsigned i=0;i<2;++i) {
     snprintf(path,sizeof(path),"%.6s%s",base,paths[i]); absentSlots[i]=missing(path);
-    if(!absentSlots[i]){error=lunaPsxVmcCard(path,hash);if(error)return error;}
+    if(!absentSlots[i]){error=lunaVmcReady(path,LUNA_VMC_PS1);if(!error)error=lunaPsxVmcCard(path,hash);if(error)return error;}
     else {
       snprintf(path,sizeof(path),"%.6s%s.prev",base,paths[i]);
       if(!missing(path))return "A card is missing but a previous save exists. Recover it before launch.";

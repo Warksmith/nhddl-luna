@@ -4,6 +4,11 @@
 // Returns 1 for Exit, 0 for the library, or STORAGE_UI_REFRESH for a rescan.
 // With no library, the menu remains open until Exit is chosen.
 int uiMainMenuLoop(int hasLibrary);
+#include "ui/game_options.h"
+void uiVmcSetLibrary(TargetList *library);
+int uiVmcPs2Slot(Target *target, ArgumentList *arguments, LunaGameOptions *options, int slot);
+int uiVmcPs2Policy(Target *target, ArgumentList *arguments, LunaGameOptions *options);
+const char *uiVmcCheckPs2(Target *target, ArgumentList *arguments);
 #ifdef LUNA_ENABLE_PSXCORE
 #include "luna_psxcore_vmc.h"
 const char *uiPs1VmcLoad(Target *target, LunaPsxVmcSettings *settings);
@@ -11,6 +16,7 @@ int uiPs1VmcRetry(Target *target, const char *error);
 int uiPs1VmcPolicy(Target *target, LunaPsxVmcSettings *settings);
 // Returns 1 after changing the pending per-game assignment.
 int uiPs1VmcPicker(Target *target, LunaPsxVmcSettings *settings);
+int uiPs1VmcSlot(Target *target, LunaPsxVmcSettings *settings, int slot);
 void uiPs1VmcManage(const LunaPsxVmcSettings *settings, int slot);
 void uiPs1VmcDescribe(const LunaPsxVmcSettings *settings, char name[64], char slots[2][32]);
 // Returns STORAGE_UI_REFRESH only after saving a playlist and requesting a scan.

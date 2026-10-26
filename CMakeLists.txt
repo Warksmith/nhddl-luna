@@ -61,6 +61,7 @@ set(SOURCES
     src/ui/file_operations.c
     src/ui/text_file.c
     src/vmc_create.c
+    src/vmc_storage.c
     src/ui/options_menu.c
     src/ui/game_options.c
     src/ui/graphics.c

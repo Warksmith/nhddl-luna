@@ -5,6 +5,9 @@
 #include "ui/text_file.h"
 #include "homebrew_launch.h"
 #include "vmc_create.h"
+#include "vmc_storage.h"
+#include "ui/game_options.h"
+#include <strings.h>
 #include "devices/devices.h"
 #include "devices/init.h"
 #include "storage.h"
@@ -2426,182 +2429,12 @@ static void uiFileManagerLoop(void) {
   free(roots);
 }
 
-static int vmcCardName(const char *name) {
-  const char *extension = strrchr(name, '.');
-  return extension != NULL && strlen(extension) == 4 &&
-         tolower((unsigned char)extension[1]) == 'b' &&
-         tolower((unsigned char)extension[2]) == 'i' &&
-         tolower((unsigned char)extension[3]) == 'n';
-}
-
-static int vmcRow(int index, char *name, size_t nameSize,
-                  char *detail, size_t detailSize, void *context) {
-  if (index == 0) {
-    snprintf(name, nameSize, lunaText("Create new card"));
-    snprintf(detail, detailSize, "8 MB");
-    return 1;
-  }
-  return fileRow(index - 1, name, nameSize, detail, detailSize, context);
-}
-
-static int loadVMCCards(const char *path, BrowserEntry *entries, int *count) {
-  DIR *directory = opendir(path);
-  *count = 0;
-  if (directory == NULL)
-    return 1; // /VMC may not exist yet.
-  struct dirent *item;
-  while (*count < BROWSER_MAX_ENTRIES && (item = readdir(directory)) != NULL) {
-    char child[PATH_MAX + 1];
-    struct stat info;
-    int hasSize;
-    if (!vmcCardName(item->d_name) ||
-        item->d_type == DT_DIR ||
-        !joinPath(child, sizeof(child), path, item->d_name))
-      continue;
-    hasSize = stat(child, &info) == 0;
-    if (hasSize && S_ISDIR(info.st_mode))
-      continue;
-    entries[*count].name = strdup(item->d_name);
-    if (entries[*count].name == NULL)
-      break;
-    entries[*count].isDirectory = 0;
-    entries[*count].hasSize = hasSize;
-    entries[*count].size = hasSize ? (uint64_t)info.st_size : 0;
-    (*count)++;
-  }
-  closedir(directory);
-  qsort(entries, *count, sizeof(entries[0]), entryCompare);
-  return 1;
-}
-
-typedef struct {
-  const char *directory;
-} VMCProgress;
-
-static void drawVMCProgress(int percent, void *context) {
-  const VMCProgress *state = context;
-  char status[80];
-  snprintf(status, sizeof(status), lunaText("Creating formatted card: %d%%"), percent);
-  drawBrowserFrame(lunaText("Virtual Memory Cards"), state->directory, status,
-                   PROMPT_TEXT(lunaText("Please wait until creation finishes")),
-                   0, 0, 0, vmcRow, NULL);
-}
-
-static int createNextVMC(const char *directory, char *created,
-                         size_t createdSize) {
-  struct stat info;
-  VMCProgress progress = {directory};
-  if (stat(directory, &info) != 0 && mkdir(directory, 0777) != 0)
-    return 0;
-  for (int index = 1; index <= 999; index++) {
-    char name[24];
-    snprintf(name, sizeof(name), "LUNA_%03d.bin", index);
-    if (!joinPath(created, createdSize, directory, name))
-      return 0;
-    if (stat(created, &info) == 0)
-      continue;
-    drawVMCProgress(0, &progress);
-    return lunaCreateVMC8(created, drawVMCProgress, &progress) == 0;
-  }
-  return 0;
-}
-
-static void uiVMCManagerLoop(void) {
-  BrowserRoot *roots = calloc(BROWSER_MAX_ROOTS, sizeof(*roots));
-  BrowserEntry *entries = calloc(BROWSER_MAX_ENTRIES, sizeof(*entries));
-  if (roots == NULL || entries == NULL) {
-    free(roots);
-    free(entries);
-    return;
-  }
-  int rootCount = 0, rootSelected = 0, activeRoot = -1;
-  int count = 0, selected = 0;
-  BrowserSelector driveSelector = {.selected = -1};
-  BrowserSelector cardSelector = {.selected = -1};
-  char directory[PATH_MAX + 1] = "";
-  char status[160];
-  snprintf(status, sizeof(status), "%s", lunaText("Choose the drive that holds your games."));
-  for (int index = 0; index < MAX_DEVICES; index++) {
-    struct DeviceMapEntry *device = &deviceModeMap[index];
-    if (device->mode == MODE_NONE || device->mountpoint == NULL)
-      break;
-    const char *root = storageVMCRoot(device);
-    if (root) {
-      const char *label = lunaText("Local storage");
-      for (int source = 0; source < STORAGE_SOURCE_COUNT; source++)
-        if (storageSourceMode(source) == device->mode)
-          label = storageSourceName(source);
-      rootCount = addRoot(roots, rootCount, root, label);
-    }
-  }
-  while (1) {
-    if (activeRoot < 0)
-      drawBrowserFrameSelected(lunaText("Virtual Memory Cards"), lunaText("Choose a drive"),
-                       rootCount ? status :
-                                                    lunaText("No supported local drives found."),
-                       PROMPT_TWO(ICON_CROSS, lunaText("Open"), ICON_TRIANGLE, lunaText("Back")),
-                       rootCount, rootSelected, browserFirstRow(rootSelected),
-                       rootRow, roots, &driveSelector);
-    else
-      drawBrowserFrameSelected(lunaText("Virtual Memory Cards"), directory, status,
-                       PROMPT_TWO(ICON_CROSS, lunaText("Create/View"),
-                                  ICON_TRIANGLE, lunaText("Back")),
-                       count + 1, selected, browserFirstRow(selected),
-                       vmcRow, entries, &cardSelector);
-    int input = readInput();
-    if (input & (PAD_TRIANGLE | PAD_CIRCLE)) {
-      if (activeRoot < 0)
-        break;
-      clearEntries(entries, count);
-      count = 0;
-      activeRoot = -1;
-      snprintf(status, sizeof(status), lunaText("Choose the drive that holds your games."));
-    } else if (input & PAD_UP) {
-      int total = activeRoot < 0 ? rootCount : count + 1;
-      int *focus = activeRoot < 0 ? &rootSelected : &selected;
-      if (total > 0)
-        *focus = (*focus + total - 1) % total;
-    } else if (input & PAD_DOWN) {
-      int total = activeRoot < 0 ? rootCount : count + 1;
-      int *focus = activeRoot < 0 ? &rootSelected : &selected;
-      if (total > 0)
-        *focus = (*focus + 1) % total;
-    } else if (input & PAD_CROSS) {
-      if (activeRoot < 0 && rootCount > 0) {
-        if (!joinPath(directory, sizeof(directory), roots[rootSelected].path,
-                      "VMC")) {
-          snprintf(status, sizeof(status), lunaText("Drive path is too long."));
-          continue;
-        }
-        activeRoot = rootSelected;
-        selected = 0;
-        cardSelector.selected = -1;
-        loadVMCCards(directory, entries, &count);
-        snprintf(status, sizeof(status), lunaText("Create a card, then assign it in pregame settings."));
-      } else if (activeRoot >= 0 && selected == 0) {
-        char created[PATH_MAX + 1];
-        if (createNextVMC(directory, created, sizeof(created))) {
-          clearEntries(entries, count);
-          loadVMCCards(directory, entries, &count);
-          selected = 0;
-          snprintf(status, sizeof(status), lunaText("Created %s"), strrchr(created, '/') + 1);
-        } else {
-          snprintf(status, sizeof(status), lunaText("Could not create card. Check free space and drive."));
-        }
-      } else if (activeRoot >= 0) {
-        snprintf(status, sizeof(status), lunaText("Assign this card in a game's VMC slot options."));
-      }
-    }
-  }
-  clearEntries(entries, count);
-  free(entries);
-  free(roots);
-}
-
+#include "vmc_common.inc"
 #ifdef LUNA_ENABLE_PSXCORE
 #include "ps1_vmc.inc"
 #include "ps1_discs.inc"
 #endif
+#include "vmc_manager.inc"
 
 static int storageRow(int index, char *name, size_t nameSize,
                       char *detail, size_t detailSize, void *context) {

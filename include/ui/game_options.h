@@ -75,6 +75,8 @@ int lunaGameOptionsCycleCore(LunaGameOptions *options,
                              int globalOpl, int direction);
 int lunaGameOptionsSetVMC(LunaGameOptions *options, ArgumentList *arguments,
                           int slot, const char *path);
+int lunaGameOptionsSetVMCPair(LunaGameOptions *options, ArgumentList *arguments,
+                             const char *first, const char *second);
 const char *lunaGameOptionsValue(const LunaGameOptions *options, LunaGameRow row);
 // Applies the library default without replacing a title-specific logo choice.
 int lunaApplyGlobalPS2Logo(ArgumentList *arguments, int enabled);

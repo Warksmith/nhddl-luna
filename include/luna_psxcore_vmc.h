@@ -11,8 +11,9 @@ typedef struct LunaPsxVmcSettings {
   char key[49]; // Empty selects Sony's default pair on the game drive.
   char gameRoot[8], gamePath[NP_FILE_PATH_BYTES];
   unsigned mode;
+  char cards[2][NP_FILE_PATH_BYTES]; // Independent paths on one save volume.
 } LunaPsxVmcSettings;
-enum { LUNA_PS1_CARDS_DEFAULT, LUNA_PS1_CARDS_CUSTOM };
+enum { LUNA_PS1_CARDS_DEFAULT, LUNA_PS1_CARDS_CUSTOM, LUNA_PS1_CARDS_SLOTS };
 typedef int (*LunaPsxVmcProgress)(uint64_t completed, uint64_t total);
 struct DeviceMapEntry;
 int lunaPsxVmcDevice(const struct DeviceMapEntry *device, char root[8]);
@@ -25,6 +26,7 @@ const char *lunaPsxVmcSave(const LunaPsxVmcSettings *settings);
 const char *lunaPsxVmcReset(Target *target);
 const char *lunaPsxVmcBase(const LunaPsxVmcSettings *settings, char base[128]);
 const char *lunaPsxVmcPaths(const char *base, char cards[2][NP_FILE_PATH_BYTES]);
+const char *lunaPsxVmcResolve(const LunaPsxVmcSettings *settings, char root[8], char cards[2][NP_FILE_PATH_BYTES]);
 const char *lunaPsxVmcPrepare(const LunaPsxVmcSettings *settings, int create);
 const char *lunaPsxVmcCreate(const char *root, const char *name, char key[49]);
 const char *lunaPsxVmcCard(const char *path, unsigned char hash[32]);

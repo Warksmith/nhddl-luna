@@ -102,10 +102,8 @@ int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
         }
         return titleError(error,size,reason);
     }
-    char base[128],cards[2][NP_FILE_PATH_BYTES],saveRoot[8],discId[33],saveId[33],saveDevice[4],discDevice[4];
-    reason=lunaPsxVmcBase(&settings,base);if(reason)return titleError(error,size,reason);
-    reason=lunaPsxVmcPaths(base,cards);if(reason)return titleError(error,size,reason);
-    snprintf(saveRoot,sizeof(saveRoot),"%.6s",base);
+    char cards[2][NP_FILE_PATH_BYTES],saveRoot[8],discId[33],saveId[33],saveDevice[4],discDevice[4];
+    reason=lunaPsxVmcResolve(&settings,saveRoot,cards);if(reason)return titleError(error,size,reason);
     const char *saveBackend=NULL;
     for(int i=0;i<MAX_DEVICES;++i) {
         char root[8];
@@ -115,7 +113,7 @@ int lunaPsxPrepareTitleCards(Target *target,const LunaPsxVmcSettings *selection,
         }
     }
     if(!saveBackend)return titleError(error,size,"The selected card drive is unavailable.");
-    int custom=settings.mode==LUNA_PS1_CARDS_CUSTOM;
+    int custom=settings.mode!=LUNA_PS1_CARDS_DEFAULT;
     unsigned char gameVolume[16]={0};
     if(custom || target->discs) {
         char verified[8];

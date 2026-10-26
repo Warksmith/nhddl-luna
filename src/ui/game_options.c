@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 static const char compatDigits[LUNA_GAME_COMPAT_COUNT] = {'0', '2', '3', '5', '7'};
 static const char *const videoValues[] = {"", "fp1", "fp2", "1080ix1", "1080ix2", "1080ix3"};
@@ -171,10 +172,33 @@ int lunaGameOptionsSetVMC(LunaGameOptions *options, ArgumentList *arguments,
                           int slot, const char *path) {
   if (slot < 0 || slot > 1 || path == NULL)
     return 0;
+  Argument *other=getArgument(arguments,slot ? "mc0" : "mc1");
+  if(path[0] && other && !other->isDisabled && other->value && !strcasecmp(path,other->value))return 0;
   if (!setArgument(arguments, slot == 0 ? "mc0" : "mc1", path, path[0] != '\0'))
     return 0;
   lunaGameOptionsRead(options, arguments);
   return 1;
+}
+
+int lunaGameOptionsSetVMCPair(LunaGameOptions *options,ArgumentList *arguments,
+                             const char *first,const char *second) {
+  if(!first || !second || (first[0] && !strcasecmp(first,second)))return 0;
+  const char *paths[]={first,second};Argument *old[2],*fresh[2]={0};
+  for(int i=0;i<2;++i) {
+    old[i]=getArgument(arguments,i?"mc1":"mc0");
+    fresh[i]=calloc(1,sizeof(*fresh[i]));
+    if(fresh[i]){fresh[i]->arg=strdup(i?"mc1":"mc0");fresh[i]->value=strdup(paths[i]);}
+    if(!fresh[i] || !fresh[i]->arg || !fresh[i]->value) {
+      for(int j=0;j<2;++j)if(fresh[j]){free(fresh[j]->arg);free(fresh[j]->value);free(fresh[j]);}
+      return 0;
+    }
+    fresh[i]->isDisabled=!paths[i][0];fresh[i]->isGlobal=0;
+  }
+  for(int i=0;i<2;++i) {
+    if(!old[i])appendArgument(arguments,fresh[i]);
+    else {free(old[i]->value);old[i]->value=fresh[i]->value;old[i]->isDisabled=fresh[i]->isDisabled;old[i]->isGlobal=0;free(fresh[i]->arg);free(fresh[i]);}
+  }
+  lunaGameOptionsRead(options,arguments);return 1;
 }
 
 int lunaGameOptionsChange(LunaGameOptions *options, ArgumentList *arguments,

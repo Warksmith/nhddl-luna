@@ -12,6 +12,7 @@
 #include "ui/wallpapers.h"
 #include "ui/art_cache.h"
 #include "ui/file_manager.h"
+#include "vmc_storage.h"
 #include "storage.h"
 #include "ui/graphics.h"
 #include "ui/handoff.h"
@@ -1465,7 +1466,9 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       optionsTriangleHeld = (pollInput() & PAD_TRIANGLE) != 0;
       input = 0;
     } else if (input & PAD_START) {
+      uiVmcSetLibrary(allTitles);
       int menuResult = uiMainMenuLoop(1);
+      uiVmcSetLibrary(NULL);
       if (menuResult == STORAGE_UI_REFRESH) {
         storageRememberSelection(curTarget, view);
         res = STORAGE_UI_REFRESH;
@@ -1662,6 +1665,10 @@ int uiLaunchTitleWithCheats(Target *target, ArgumentList *arguments,
   if (ownedArguments) arguments = loadLaunchArgumentLists(target);
   char error[192], *payload = NULL;
   int result = lunaCheatsPrepare(target, cheats, &payload, error, sizeof(error));
+  if(!result) {
+    const char *problem=uiVmcCheckPs2(target,arguments);
+    if(problem){snprintf(error,sizeof(error),"%s",lunaText(problem));result=-1;}
+  }
   if (!result && !launchTitleArgumentsFit(target, arguments, payload)) {
     snprintf(error, sizeof(error), lunaText("Launch arguments are too large. Reduce selected cheats or custom arguments."));
     result = -1;
