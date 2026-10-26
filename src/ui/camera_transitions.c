@@ -1,13 +1,13 @@
 #include "ui/camera_transitions.h"
 #include "ui/graphics.h"
-#include "ui/psbbn_motion.h"
+#include "ui/luna_motion.h"
 #include <math.h>
 #include <stddef.h>
 
-static LunaPsbbnMotion camera;
+static LunaMotion camera;
 static uint32_t lastMs, pendingTicks;
 static int initialized, wasOpen, armed, applied, savedOffsetX;
-static LunaPsbbnMotion viewMotion;
+static LunaMotion viewMotion;
 static GSTEXTURE *viewCover;
 static float sourceRect[4];
 static int viewTarget = -1, viewReady;
@@ -15,7 +15,7 @@ static int viewSettled;
 static uint32_t turnMs;
 static int turnBack;
 enum { TURN_HALF_MS = 350 };
-static LunaPsbbnMotion channelMotion;
+static LunaMotion channelMotion;
 static uint32_t channelAgeMs;
 static int channelTarget = -1;
 
@@ -29,7 +29,7 @@ static void restoreCameraOffset(void) {
 void lunaCameraChannelCancel(void) {
   channelTarget = -1;
   channelAgeMs = 0;
-  lunaPsbbnMotionReset(&channelMotion);
+  lunaMotionReset(&channelMotion);
 }
 
 void lunaCameraChannelStart(int target) {
@@ -37,7 +37,7 @@ void lunaCameraChannelStart(int target) {
   if (!LUNA_CAMERA_ORBIT_TRANSITION || target < 0) return;
   channelTarget = target;
   const float destination[3] = {1, 0, 0};
-  lunaPsbbnMotionRetarget(&channelMotion, destination, 750.0f, 1.0f);
+  lunaMotionRetarget(&channelMotion, destination, 750.0f, 1.0f);
 }
 
 void lunaCameraChannelCheck(int isOrbit, int target) {
@@ -71,7 +71,7 @@ void lunaCameraViewCancel(void) {
   viewSettled = 0;
   turnMs = 0;
   turnBack = 0;
-  lunaPsbbnMotionReset(&viewMotion);
+  lunaMotionReset(&viewMotion);
 }
 
 void lunaCameraViewStart(GSTEXTURE *cover, int target, const float rect[4]) {
@@ -83,7 +83,7 @@ void lunaCameraViewStart(GSTEXTURE *cover, int target, const float rect[4]) {
   viewTarget = target;
   for (int i = 0; i < 4; ++i) sourceRect[i] = rect[i];
   const float destination[3] = {1.0f, 0, 0};
-  lunaPsbbnMotionRetarget(&viewMotion, destination, 750.0f, 1.0f);
+  lunaMotionRetarget(&viewMotion, destination, 750.0f, 1.0f);
 }
 
 void lunaCameraViewCheck(int isCollection, int target) {
@@ -136,7 +136,7 @@ void lunaCameraSceneBeforeBackground(void) {
 void lunaCameraSceneBegin(int open, uint32_t nowMs) {
   restoreCameraOffset();
   if (!initialized) {
-    lunaPsbbnMotionReset(&camera);
+    lunaMotionReset(&camera);
     lastMs = nowMs;
     initialized = 1;
   }
@@ -148,9 +148,9 @@ void lunaCameraSceneBegin(int open, uint32_t nowMs) {
   }
   pendingTicks += elapsed * 60U;
   while (pendingTicks >= 1000U) {
-    lunaPsbbnMotionTick(&camera);
-    if (viewCover && !viewSettled) lunaPsbbnMotionTick(&viewMotion);
-    if (lunaCameraChannelActive()) lunaPsbbnMotionTick(&channelMotion);
+    lunaMotionTick(&camera);
+    if (viewCover && !viewSettled) lunaMotionTick(&viewMotion);
+    if (lunaCameraChannelActive()) lunaMotionTick(&channelMotion);
     pendingTicks -= 1000U;
   }
   if (viewCover) {
@@ -176,7 +176,7 @@ void lunaCameraSceneBegin(int open, uint32_t nowMs) {
   if (cameraOpen != wasOpen) {
     /* Screen-space adaptation: full original perspective is not reconstructed. */
     const float target[3] = {cameraOpen ? -280.0f : 0.0f, 0.0f, 0.0f};
-    lunaPsbbnMotionRetarget(&camera, target, 750.0f, 1.0f);
+    lunaMotionRetarget(&camera, target, 750.0f, 1.0f);
     wasOpen = cameraOpen;
   }
   armed = 1;

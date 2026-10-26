@@ -1,14 +1,14 @@
-#include "ui/psbbn_motion.h"
+#include "ui/luna_motion.h"
 #include <math.h>
 #include <string.h>
 
 static const float referenceTick = 1.0f / 60.0f;
 
-void lunaPsbbnMotionReset(LunaPsbbnMotion *motion) {
+void lunaMotionReset(LunaMotion *motion) {
   memset(motion, 0, sizeof(*motion));
 }
 
-void lunaPsbbnMotionRetarget(LunaPsbbnMotion *motion, const float target[3],
+void lunaMotionRetarget(LunaMotion *motion, const float target[3],
                            float durationMs, float historyScale) {
   const float requested = fmaxf(0.0f, durationMs) * 0.001f;
   int frames = (int)(requested * 60.0f);
@@ -28,7 +28,7 @@ void lunaPsbbnMotionRetarget(LunaPsbbnMotion *motion, const float target[3],
   }
 }
 
-void lunaPsbbnMotionTick(LunaPsbbnMotion *motion) {
+void lunaMotionTick(LunaMotion *motion) {
   if (!motion->active)
     return;
   motion->elapsed += referenceTick;

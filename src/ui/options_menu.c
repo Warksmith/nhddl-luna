@@ -7,6 +7,7 @@
 #include "ui/file_manager.h"
 #include "opl_devices.h"
 #include "ui/ambient.h"
+#include "ui/space_flight.h"
 #include "ui/pad.h"
 #include "ui/view_state.h"
 #include "options.h"
@@ -620,7 +621,8 @@ static OptionsPage optionsNextPage(OptionsPage page, int direction) {
 }
 
 static int optionsOrbsEditable(const OptionsMenuState *state) {
-  return *state->ambientOrbsBackgroundSetting == LIBRARY_BACKGROUND_ORBS;
+  return *state->ambientOrbsBackgroundSetting == LIBRARY_BACKGROUND_ORBS ||
+         *state->ambientOrbsBackgroundSetting == LIBRARY_BACKGROUND_SPACE_FLIGHT;
 }
 
 static int optionsOrbsColorsEditable(const OptionsMenuState *state) {
@@ -768,7 +770,8 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
   const int middle = gsGlobal->Width / 2;
   static const int englishTabOffsets[] = {-175, -75, 30, 135};
   int tabOffsets[4];
-  static const char *const tabLabels[] = {"Game", "Global", "Views", "Orbs"};
+  const char *const tabLabels[] = {"Game", "Global", "Views",
+      getLibraryBackground() == LIBRARY_BACKGROUND_SPACE_FLIGHT ? "Space" : "Orbs"};
   // Fit translated headings by their rendered widths.
   // Preserve the existing English layout.
   int tabWidths[4], totalTabWidth = 3 * 24;
@@ -802,7 +805,7 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
     static const char *const backgroundLabels[LIBRARY_BACKGROUND_COUNT] = {
         "Stars & cubes", "Ambient Orbs", "Red Clouds", "Midnight Cubes",
         "System Configuration", "Neo", "Aurora", "Ronin", "Gridrunner",
-        "Torch", "Tempest"};
+        "Torch", "Tempest", "Space Flight"};
     const int firstY = menuTop + lineHeight + 4;
     const int rowStep = (menuBottom - firstY - 3 * lineHeight) / 6;
     int selectorY = optionsSelectorY(&state->selector, state->page, state->selectedGlobal,
@@ -832,7 +835,7 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
                        gsGlobal->Width - baseX, state->selectedGlobal == 5, selectorY,
                        lunaText("Ambient sound"), state->pendingAmbient ? lunaText("On") : lunaText("Off"));
     static const char *const descriptions[] = {
-        "Choose a library background; customize Ambient Orbs in Orbs.",
+        "Choose a background; tune Space Flight in the Space tab.",
         "Change the tint of the glass interface.",
         "Use LUNA's font or the PSBBN keyboard lettering.",
         "Default PS2 startup logo setting for every game.",
@@ -902,8 +905,25 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
                     HeaderTextColor, (PromptBar){NULL, cycle, 1});
     }
   } else if (state->page == OPTIONS_ORBS) {
-    drawOptionsSection(menuTop, lunaText(state->orbsShapesPage ? "Shapes" : "Orbs"), 0);
-    if (!optionsOrbsEditable(state)) {
+    const int space = getLibraryBackground() == LIBRARY_BACKGROUND_SPACE_FLIGHT;
+    drawOptionsSection(menuTop, space ? "Space Flight" : lunaText(state->orbsShapesPage ? "Shapes" : "Orbs"), 0);
+    if (space) {
+      static const char *const speedLabels[] = {"Paused", "0.15x", "0.30x", "0.60x", "1.00x", "1.70x", "2.80x", "4.20x", "6.00x"};
+      static const char *const depthLabels[] = {"Shallow", "Near", "Balanced", "Deep", "Very deep"};
+      state->selectedOrbsRow &= 1;
+      const int firstY = menuTop + lineHeight * 2;
+      const int selectedY = firstY + state->selectedOrbsRow * rowStep * 2;
+      const int selectorY = optionsSelectorY(&state->selector, state->page,
+          state->selectedOrbsRow, selectedY);
+      drawOptionsTextRow(baseX, firstY, gsGlobal->Width - baseX,
+          state->selectedOrbsRow == 0, selectorY, "Speed", speedLabels[lunaSpaceSpeed()]);
+      drawOptionsTextRow(baseX, firstY + rowStep * 2, gsGlobal->Width - baseX,
+          state->selectedOrbsRow == 1, selectorY, "Depth", depthLabels[lunaSpaceDepth()]);
+      if (showDescription)
+        drawTextWindow(baseX + 18, menuBottom, gsGlobal->Width - baseX,
+            gsGlobal->Height - footerHeight, 0, HeaderTextColor, ALIGN_LEFT,
+            "Left/right adjusts the live wallpaper. These trial values last until restart.");
+    } else if (!optionsOrbsEditable(state)) {
       drawOrbsUnavailablePopup(baseX, menuTop, menuBottom);
     } else {
       static const char *const colorLabels[ORBS_COLOR_COUNT] = {
@@ -1200,6 +1220,7 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
                   (PromptBar){NULL,prompts,promptCount});
   } else drawOptionsFooter(state->page == OPTIONS_PER_GAME, 0,
                     state->page == OPTIONS_ORBS && !optionsOrbsEditable(state),
+                    state->page == OPTIONS_ORBS && getLibraryBackground() == LIBRARY_BACKGROUND_SPACE_FLIGHT ? "Adjust" :
                     state->page == OPTIONS_ORBS && state->orbsShapesPage ? lunaText("Toggle") :
                     state->page == OPTIONS_ORBS &&
                     state->pendingOrbsTheme == ORBS_THEME_LUNA &&
@@ -1426,6 +1447,18 @@ static int uiVMCPickerLoop(Target *target, ArgumentList *arguments,
 }
 
 static int handleOrbsInput(OptionsMenuState *state, int input) {
+  if (getLibraryBackground() == LIBRARY_BACKGROUND_SPACE_FLIGHT) {
+    state->selectedOrbsRow &= 1;
+    if (input & PAD_TRIANGLE) return 1;
+    if (input & (PAD_UP | PAD_DOWN)) state->selectedOrbsRow ^= 1;
+    else if (input & (PAD_LEFT | PAD_RIGHT | PAD_CROSS | PAD_CIRCLE)) {
+      const int step = (input & PAD_LEFT) ? -1 : 1;
+      if (state->selectedOrbsRow == 0) lunaSpaceSetSpeed(lunaSpaceSpeed() + step);
+      else lunaSpaceSetDepth(lunaSpaceDepth() + step);
+    }
+    return 0;
+  }
+
   if (!optionsOrbsEditable(state)) {
     if (input & PAD_TRIANGLE) {
       state->page = OPTIONS_VIEWS;

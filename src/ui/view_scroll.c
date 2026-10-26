@@ -5,6 +5,7 @@
 #include "ui/ambient_orbs.h"
 #include "ui/neo.h"
 #include "ui/wallpapers.h"
+#include "ui/space_flight.h"
 #include "ui/ps2_menu_scene.h"
 #include "options.h"
 #include <gsInline.h>
@@ -1563,7 +1564,9 @@ void drawSharedLibraryBackground(uint32_t frameNowMs) {
 #ifdef LUNA_CAMERA_ANIMATIONS
   lunaCameraSceneBeforeBackground();
 #endif
-  if (libraryBackground >= LIBRARY_BACKGROUND_AURORA &&
+  if (libraryBackground == LIBRARY_BACKGROUND_SPACE_FLIGHT)
+    drawSpaceFlight(frameNowMs);
+  else if (libraryBackground >= LIBRARY_BACKGROUND_AURORA &&
       libraryBackground <= LIBRARY_BACKGROUND_TEMPEST)
     drawAnimatedWallpaper(libraryBackground, frameNowMs);
   else if (libraryBackground == LIBRARY_BACKGROUND_NEO)

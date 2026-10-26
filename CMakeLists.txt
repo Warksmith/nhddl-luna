@@ -84,6 +84,7 @@ set(SOURCES
   src/ui/ambient_orbs.c
   src/ui/neo.c
   src/ui/wallpapers.c
+  src/ui/space_flight.c
     src/ui/pad.c
 
     # Devices
@@ -127,7 +128,7 @@ endif()
 # Create the main executable
 add_executable(${EE_BIN} ${SOURCES})
 if(LUNA_CAMERA_ANIMATIONS)
-  target_sources(${EE_BIN} PRIVATE src/ui/psbbn_motion.c src/ui/camera_transitions.c)
+  target_sources(${EE_BIN} PRIVATE src/ui/luna_motion.c src/ui/camera_transitions.c)
   target_compile_definitions(${EE_BIN} PRIVATE LUNA_CAMERA_ANIMATIONS=1
     LUNA_CAMERA_MENU_PAN=$<BOOL:${LUNA_CAMERA_MENU_PAN}>
     LUNA_CAMERA_LIST_TURN=$<BOOL:${LUNA_CAMERA_LIST_TURN}>

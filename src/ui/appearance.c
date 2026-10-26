@@ -20,7 +20,7 @@ static const char *const recordNames[] = {
 };
 static const char *const backgrounds[] = {
   "stars", "orbs", "red-clouds", "midnight-cubes", "system-config", "neo",
-  "aurora", "ronin", "gridrunner", "torch", "tempest"
+  "aurora", "ronin", "gridrunner", "torch", "tempest", "space-flight"
 };
 static const char *const glasses[] = {"original", "white-gray", "black"};
 static const char *const fonts[] = {"dejavu", "psbbn"};
