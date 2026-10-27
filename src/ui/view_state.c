@@ -521,6 +521,8 @@ static int legacyAmbientSoundEnabled(Target *target) {
 
 
 void loadLegacyAppearance(Target *target, LunaAppearance *settings) {
+  settings->spaceSpeed = 4;
+  settings->spaceDepth = 2;
   settings->ringColor = 0;
   settings->background = legacyLibraryBackground(target);
   settings->glassColor = legacyGlassColorPreset(target);

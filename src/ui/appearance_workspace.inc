@@ -1,5 +1,5 @@
-/* Appearance stays on one screen: categories, focused controls, fixed actions. */
-enum { AP_FOCUS_CATEGORIES,AP_FOCUS_CONTROLS,AP_FOCUS_ACTIONS,AP_FOCUS_EXIT };
+/* Appearance stays on one screen; adjustments save as soon as they succeed. */
+enum { AP_FOCUS_CATEGORIES,AP_FOCUS_CONTROLS };
 static float apX(float x) {return x*gsGlobal->Width/640;}
 static float apY(float y) {return y*gsGlobal->Height/480;}
 static uint64_t apInk(int r,int g,int b,float opacity) {
@@ -84,6 +84,10 @@ static void appearanceWorkspaceDraw(void *context,float opacity) {
     apRect(260,67,3,23,cyan);
   }
   apLine(32,26,330,bright,"Appearance");
+  if(s->savedAt&&uiNowMs()-s->savedAt<1800U) {
+    apGlassPanel(510,18,100,32,opacity*.85f);
+    apLine(525,24,70,cyan,"Saved");
+  }
   apLine(32,75,195,s->focus==AP_FOCUS_CATEGORIES?cyan:muted,
       s->focus==AP_FOCUS_CATEGORIES?"Choose a category":"Categories");
   for(int i=0;i<AP_WORKSPACE_CATEGORIES;i++) {
@@ -97,8 +101,7 @@ static void appearanceWorkspaceDraw(void *context,float opacity) {
     }
     apLine(40,115+42*i,184,active?bright:muted,categories[category]);
   }
-  apLine(32,374,196,appearanceDirty(s)?cyan:muted,
-      s->loadError?"Settings unavailable":appearanceDirty(s)?"Unsaved changes":"All changes saved");
+  if(s->loadError)apLine(32,374,196,muted,"Settings unavailable");
   apLine(272,68,330,s->focus==AP_FOCUS_CONTROLS?cyan:bright,categories[s->category]);
   int count=appearanceWorkspaceRows(s),row=s->rows[s->category];
   if(row>=count)row=s->rows[s->category]=0;
@@ -143,7 +146,6 @@ static void appearanceWorkspaceDraw(void *context,float opacity) {
     }
   }
   const char *description=s->message?s->message:
-    s->focus==AP_FOCUS_ACTIONS?(s->action?"Restore the last saved appearance.":"Save your previewed changes."):
     s->focus==AP_FOCUS_CATEGORIES?appearanceHubDescription(s,s->category):
     s->category==AP_BACKGROUND&&row==0?(count>1?
         "Left / Right chooses a background. Down opens its effects.":
@@ -151,79 +153,32 @@ static void appearanceWorkspaceDraw(void *context,float opacity) {
     appearanceWorkspaceDescription(s,row);
   drawTextWindow((int)apX(272),(int)apY(365),(int)apX(610),(int)apY(411),7,
       muted,ALIGN_LEFT,lunaText(description));
-  for(int i=0;i<2;i++) {
-    int active=s->focus==AP_FOCUS_ACTIONS&&s->action==i;
-    if(active)apFocusRow(278+i*165,421,153,29,opacity);
-    else apRect(278+i*165,421,153,29,apInk(9,24,41,opacity*.9f));
-    apLine(294+i*165,425,126,active?bright:muted,i?"Discard":"Apply");
-  }
-  if(s->focus==AP_FOCUS_EXIT) {
-    // Dim the complete workspace before drawing the active dialog and controls.
-    // Keep the veil neutral even when the Cyber preset recolors interface ink.
-    gsKit_prim_sprite(gsGlobal,0,0,gsGlobal->Width,gsGlobal->Height,8,
-        GS_SETREG_RGBA(0,0,0,(int)(70*fmaxf(0,fminf(1,opacity)))));
-    apGlassPanel(148,143,344,186,opacity*.98f);
-    apLine(170,159,300,bright,"Unsaved changes");
-    for(int i=0;i<3;i++) {
-      if(s->exitChoice==i)apFocusRow(161,194+39*i,318,34,opacity);
-      apLine(179,201+39*i,280,s->exitChoice==i?bright:muted,
-          (const char *const[]){"Apply","Discard","Keep editing"}[i]);
-    }
-    ButtonPrompt prompts[]={{ICON_DPAD,lunaText("Select")},
-        {ICON_CROSS,lunaText("Confirm")},{ICON_CIRCLE,lunaText("Keep editing")}};
-    drawPromptBar((int)apX(20),(int)apY(454),(int)apX(620),(int)apY(479),7,
-        muted,(PromptBar){NULL,prompts,3});
-    return;
-  }
   ButtonPrompt prompts[]={{ICON_DPAD,lunaText(s->focus==AP_FOCUS_CONTROLS?"Adjust":"Select")},
-      {ICON_CROSS,lunaText(s->focus==AP_FOCUS_CONTROLS?"Change":s->focus>=AP_FOCUS_ACTIONS?"Confirm":"Open")},
-      {ICON_CIRCLE,lunaText(s->focus==AP_FOCUS_CATEGORIES?"Close":"Back")},
-      {ICON_SQUARE,lunaText("Apply / Discard")}};
-  drawPromptBar((int)apX(20),(int)apY(454),(int)apX(620),(int)apY(479),7,muted,(PromptBar){NULL,prompts,4});
+      {ICON_CROSS,lunaText(s->focus==AP_FOCUS_CONTROLS?"Change":"Open")},
+      {ICON_CIRCLE,lunaText(s->focus==AP_FOCUS_CATEGORIES?"Close":"Back")}};
+  drawPromptBar((int)apX(20),(int)apY(454),(int)apX(620),(int)apY(479),7,muted,(PromptBar){NULL,prompts,3});
 }
 static int appearanceWorkspaceInput(void *context,int input) {
   AppearanceEditor *s=context;
   if(!input)return 0;
-  if(s->focus==AP_FOCUS_EXIT) {
-    if(input&(PAD_CIRCLE|PAD_TRIANGLE|PAD_START))s->focus=AP_FOCUS_CATEGORIES;
-    else if(input&PAD_UP)s->exitChoice=(s->exitChoice+2)%3;
-    else if(input&PAD_DOWN)s->exitChoice=(s->exitChoice+1)%3;
-    else if(input&PAD_CROSS) {
-      if(s->exitChoice==0) {if(!appearanceApply(s))return 1;s->focus=AP_FOCUS_ACTIONS;}
-      else if(s->exitChoice==1) {if(!appearanceDiscard(s))return 1;s->focus=AP_FOCUS_ACTIONS;}
-      else s->focus=AP_FOCUS_CATEGORIES;
-    }
-    return 0;
-  }
-  if(input&PAD_SQUARE) {s->focus=AP_FOCUS_ACTIONS;s->action=0;return 0;}
   if(input&(PAD_CIRCLE|PAD_TRIANGLE|PAD_START)) {
     if(s->focus!=AP_FOCUS_CATEGORIES) {s->focus=AP_FOCUS_CATEGORIES;return 0;}
-    if(!appearanceDirty(s))return 1;
-    s->focus=AP_FOCUS_EXIT;s->exitChoice=2;return 0;
+    return 1;
   }
   if(s->focus==AP_FOCUS_CATEGORIES) {
-    if(input&PAD_UP) {
-      if(s->category==0) {s->focus=AP_FOCUS_ACTIONS;s->action=0;}
-      else {s->category=appearanceWorkspaceCategories[appearanceWorkspaceCategoryIndex(s)-1];s->message=NULL;}
-    } else if(input&PAD_DOWN) {
-      if(appearanceWorkspaceCategoryIndex(s)==AP_WORKSPACE_CATEGORIES-1) {s->focus=AP_FOCUS_ACTIONS;s->action=0;}
-      else {s->category=appearanceWorkspaceCategories[appearanceWorkspaceCategoryIndex(s)+1];s->message=NULL;}
+    if(input&(PAD_UP|PAD_DOWN)) {
+      int next=(appearanceWorkspaceCategoryIndex(s)+(input&PAD_UP?AP_WORKSPACE_CATEGORIES-1:1))%AP_WORKSPACE_CATEGORIES;
+      s->category=appearanceWorkspaceCategories[next];
+      if(!s->loadError)s->message=NULL;
     } else if(input&(PAD_CROSS|PAD_RIGHT))s->focus=AP_FOCUS_CONTROLS;
   } else if(s->focus==AP_FOCUS_CONTROLS) {
     int count=appearanceWorkspaceRows(s),*row=&s->rows[s->category];
     if(*row>=count)*row=0;
     if(input&PAD_UP)*row=(*row+count-1)%count;
-    else if(input&PAD_DOWN) {
-      if(*row==count-1) {s->focus=AP_FOCUS_ACTIONS;s->action=0;}
-      else (*row)++;
-    } else if(input&(PAD_LEFT|PAD_RIGHT|PAD_CROSS)) {
+    else if(input&PAD_DOWN)*row=(*row+1)%count;
+    else if(input&(PAD_LEFT|PAD_RIGHT|PAD_CROSS)) {
       appearanceWorkspaceAdjust(s,*row,input&PAD_LEFT?-1:1);
     }
-  } else {
-    if(input&(PAD_LEFT|PAD_RIGHT))s->action^=1;
-    else if(input&PAD_UP)s->focus=AP_FOCUS_CONTROLS;
-    else if(input&PAD_DOWN)s->focus=AP_FOCUS_CATEGORIES;
-    else if(input&PAD_CROSS) {if(s->action)appearanceDiscard(s);else appearanceApply(s);}
   }
   return 0;
 }

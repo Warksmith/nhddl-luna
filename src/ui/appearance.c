@@ -13,7 +13,7 @@
 #define NEWLIB_PORT_AWARE
 #include <fileXio_rpc.h>
 
-#define APPEARANCE_VERSION 2U
+#define APPEARANCE_VERSION 3U
 #define RECORD_LIMIT 2048
 #define RECORD_WRITE_SIZE 512
 static const char *const recordNames[] = {
@@ -31,6 +31,8 @@ static const char *const cases[] = {"tall", "square"};
 static const char *const themes[] = {"luna", "ps2-original"};
 static const char *const colors[] = {"original", "cyan", "violet", "rose", "green", "gold", "white"};
 static const char *const ringColors[] = {"original","cyan","blue","violet","rose","green","white"};
+static const char *const spaceSpeeds[] = {"0","1","2","3","4","5","6","7","8"};
+static const char *const spaceDepths[] = {"0","1","2","3","4"};
 _Static_assert(sizeof(ringColors)/sizeof(*ringColors)==LUNA_RING_COLOR_COUNT,"Update ring color storage names");
 static const char *const views[UI_VIEW_ID_LIMIT] = {
   [UI_VIEW_CLASSIC] = "classic", [UI_VIEW_PSBBN] = "collection",
@@ -61,7 +63,8 @@ static const AppearanceField fields[] = {
   FIELD(collectionGameList, switches, 0), FIELD(ps1CaseStyle, cases, 0),
   FIELD(orbsTheme, themes, 0), FIELD(orbsAppearance, themes, 0),
   FIELD(orbsColor, colors, 0), FIELD(tailsColor, colors, 0),
-  FIELD(orbShapes, shapes, 1), FIELD(ringColor, ringColors, 0)
+  FIELD(orbShapes, shapes, 1), FIELD(ringColor, ringColors, 0),
+  FIELD(spaceSpeed, spaceSpeeds, 0), FIELD(spaceDepth, spaceDepths, 0)
 };
 #define FIELD_COUNT (sizeof(fields)/sizeof(*fields))
 typedef struct {
@@ -173,7 +176,7 @@ static int readRecord(const char *path, AppearanceRecord *record) {
   if (result) return result;
   // Protect future formats even when an older supported backup exists.
   if (version > APPEARANCE_VERSION) return -ENOTSUP;
-  if (version != 1U && version != APPEARANCE_VERSION) return -EINVAL;
+  if (version < 1U) return -EINVAL;
   char *footer = strstr(bytes, "\nchecksum=");
   if (!footer || strlen(footer + 1) != 18 || footer[18] != '\n') return -EINVAL;
   char *hex = footer + 10;
@@ -182,6 +185,9 @@ static int readRecord(const char *path, AppearanceRecord *record) {
   if (checksum(bytes, (size_t)(footer + 1 - bytes)) != expected) return -EINVAL;
   *footer = '\0';
   memset(record, 0, sizeof(*record));
+  // Older records retain Space Flight's original speed and depth defaults.
+  record->settings.spaceSpeed=4;
+  record->settings.spaceDepth=2;
   char *line = lineEnd + 1;
   lineEnd = strchr(line, '\n');
   if (!lineEnd) return -EINVAL;
@@ -204,9 +210,9 @@ static int readRecord(const char *path, AppearanceRecord *record) {
     if (!lineEnd) break;
     line = lineEnd + 1;
   }
-  // Version 1 has no ring field; zero initialization preserves the original
-  // blue ring. Version 2 requires every field, including its stored color.
-  uint32_t required=(1U << (version==1U?FIELD_COUNT-1:FIELD_COUNT))-1U;
+  // Fields are appended: v1 has no ring color; v2 has no Space Flight settings.
+  unsigned count=FIELD_COUNT-(version==1U?3:version==2U?2:0);
+  uint32_t required=(1U << count)-1U;
   return seen == required && validSettings(&record->settings) ? 0 : -EINVAL;
 }
 

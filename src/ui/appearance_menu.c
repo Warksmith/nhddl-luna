@@ -17,9 +17,9 @@
 #include <string.h>
 #include <unistd.h>
 
-enum { AP_BACKGROUND,AP_VIEWS,AP_COLORS,AP_EFFECTS,AP_TEXT,AP_SOUND,AP_APPLY,AP_DISCARD };
+enum { AP_BACKGROUND,AP_VIEWS,AP_COLORS,AP_EFFECTS,AP_TEXT,AP_SOUND };
 static const char *const categories[]={"Backgrounds","Library Views","Interface Colors",
-  "Background Effects","Text","Ambient Sound","Apply","Discard"};
+  "Background Effects","Text","Ambient Sound"};
 static const char *const backgrounds[]={"Stars & cubes","Ambient Orbs","Red Clouds","Midnight Cubes",
   "System Configuration","Neo","Aurora","Ronin","Gridrunner","Torch","Tempest","Space Flight"};
 static const char *const colors[]={"Original","Cyan","Violet","Rose","Green","Gold","White"};
@@ -28,18 +28,14 @@ typedef struct {
   Target *target;
   LunaAppearance saved,pending,runtime;
   int category,loadError;
-  int speed,depth,savedSpeed,savedDepth;
+  uint32_t savedAt;
   const char *message;
   char value[96];
-  int focus,rows[6],action,exitChoice;
+  int focus,rows[6];
 } AppearanceEditor;
 
 static void appearanceReleaseButtons(void) {
   while(pollInput()&(PAD_CROSS|PAD_CIRCLE|PAD_TRIANGLE|PAD_START))usleep(1000);
-}
-static int appearanceDirty(const AppearanceEditor *s) {
-  return memcmp(&s->saved,&s->pending,sizeof(s->saved))||
-    s->speed!=s->savedSpeed||s->depth!=s->savedDepth;
 }
 static int appearancePreview(AppearanceEditor *s,const LunaAppearance *a) {
   const LunaAppearance *old=&s->runtime;
@@ -60,18 +56,8 @@ static int appearancePreview(AppearanceEditor *s,const LunaAppearance *a) {
   if(a->orbShapes!=old->orbShapes)setAmbientOrbsShapes(a->orbShapes,uiNowMs());
   setAmbientOrbsColor(ORBS_COLOR_PART_ORBS,(AmbientOrbsColor)a->orbsColor);
   setAmbientOrbsColor(ORBS_COLOR_PART_TAILS,(AmbientOrbsColor)a->tailsColor);
+  lunaSpaceSetSpeed(a->spaceSpeed);lunaSpaceSetDepth(a->spaceDepth);
   s->runtime=*a;return 0;
-}
-static int appearanceApply(AppearanceEditor *s) {
-  if(s->loadError) {s->message="Could not read appearance settings";return -1;}
-  if(saveAppearance(s->target,&s->pending)) {s->message="Could not save appearance settings";return -1;}
-  s->saved=s->pending;s->savedSpeed=s->speed;s->savedDepth=s->depth;
-  s->message="Saved";return 0;
-}
-static int appearanceDiscard(AppearanceEditor *s) {
-  if(appearancePreview(s,&s->saved)) {s->message="Could not restore appearance";return -1;}
-  s->pending=s->saved;s->speed=s->savedSpeed;s->depth=s->savedDepth;
-  lunaSpaceSetSpeed(s->speed);lunaSpaceSetDepth(s->depth);s->message=NULL;return 0;
 }
 static const char *appearanceHubDescription(void *context,int row) {
   AppearanceEditor *s=context;
@@ -79,8 +65,7 @@ static const char *appearanceHubDescription(void *context,int row) {
   static const char *const descriptions[]={
     "Preview the background used throughout LUNA.","Choose library views and cover layouts.",
     "Choose the glass tint and Start-menu ring color.","Tune Ambient Orbs or Space Flight.",
-    "Choose the interface font. Wide menu headings stay unchanged.","Play ambient music while browsing.",
-    "Save your previewed changes.","Restore the last saved appearance."};
+    "Choose the interface font. Wide menu headings stay unchanged.","Play ambient music while browsing."};
   return descriptions[row];
 }
 static int appearanceRowCount(AppearanceEditor *s) {
@@ -122,7 +107,7 @@ static const char *appearanceRowValue(void *context,int row) {
       break;
     default:
       if(a->background==LIBRARY_BACKGROUND_SPACE_FLIGHT) {
-        snprintf(s->value,sizeof(s->value),"%d",row?s->depth:s->speed);return s->value;
+        snprintf(s->value,sizeof(s->value),"%u",(unsigned)(row?a->spaceDepth:a->spaceSpeed));return s->value;
       }
       if(a->background!=LIBRARY_BACKGROUND_ORBS)return "Ambient Orbs required";
       if(row==0)return a->orbsTheme==ORBS_THEME_LUNA?"LUNA":"PS2 original";
@@ -138,15 +123,16 @@ static const char *appearanceRowDescription(void *context,int row) {
   if(s->message)return s->message;
   if(s->category==AP_COLORS&&row==1)return "Changes the Start-menu ring and its fading copies.";
   if(s->category==AP_EFFECTS) {
-    if(s->pending.background==LIBRARY_BACKGROUND_SPACE_FLIGHT)return "Space Flight speed and depth are session settings.";
+    if(s->pending.background==LIBRARY_BACKGROUND_SPACE_FLIGHT)return "Changes save automatically.";
     if(s->pending.background!=LIBRARY_BACKGROUND_ORBS)return "Choose Ambient Orbs or Space Flight under Backgrounds.";
     if(row>=4)return "Choose LUNA formations. All off keeps playtime.";
     if(row>=2&&s->pending.orbsAppearance==ORBS_APPEARANCE_PS2_ORIGINAL)return "PS2 original appearance uses its original colors.";
   }
-  return "Left / Right or Cross previews a change. Circle returns.";
+  return "Changes save automatically.";
 }
 static void appearanceAdjust(void *context,int row,int direction) {
   AppearanceEditor *s=context;LunaAppearance candidate=s->pending;s->message=NULL;
+  if(s->loadError) {s->savedAt=0;s->message="Could not read appearance settings";return;}
   switch(s->category) {
     case AP_BACKGROUND:candidate.background=(candidate.background+LIBRARY_BACKGROUND_COUNT+direction)%LIBRARY_BACKGROUND_COUNT;break;
     case AP_COLORS:
@@ -166,9 +152,12 @@ static void appearanceAdjust(void *context,int row,int direction) {
       break;
     default:
       if(candidate.background==LIBRARY_BACKGROUND_SPACE_FLIGHT) {
-        if(row) {s->depth+=direction;lunaSpaceSetDepth(s->depth);s->depth=lunaSpaceDepth();}
-        else {s->speed+=direction;lunaSpaceSetSpeed(s->speed);s->speed=lunaSpaceSpeed();}
-        return;
+        int value=(int)(row?candidate.spaceDepth:candidate.spaceSpeed)+direction;
+        int maximum=row?4:8;
+        if(value<0)value=0;
+        if(value>maximum)value=maximum;
+        if(row)candidate.spaceDepth=value;else candidate.spaceSpeed=value;
+        break;
       }
       if(candidate.background!=LIBRARY_BACKGROUND_ORBS)return;
       if(row==0)candidate.orbsTheme^=1;
@@ -182,8 +171,16 @@ static void appearanceAdjust(void *context,int row,int direction) {
         candidate.orbShapes^=1U<<(row-4);
       }
   }
+  if(!memcmp(&candidate,&s->pending,sizeof(candidate)))return;
+  s->savedAt=0;
   if(appearancePreview(s,&candidate)) {s->message="Could not preview appearance";return;}
-  s->pending=candidate;
+  if(saveAppearance(s->target,&candidate)) {
+    s->message=appearancePreview(s,&s->saved)?"Could not restore appearance":"Could not save appearance settings";
+    s->pending=s->runtime;
+    return;
+  }
+  s->pending=s->saved=candidate;
+  s->savedAt=uiNowMs();
 }
 #include "appearance_workspace.inc"
 int uiAppearanceLoop(Target *target) {
@@ -197,7 +194,6 @@ int uiAppearanceLoop(Target *target) {
   setAmbientOrbsTheme((AmbientOrbsTheme)state.saved.orbsTheme,uiNowMs());
   setAmbientOrbsShapes(state.saved.orbShapes,uiNowMs());
   appearancePreview(&state,&state.saved);
-  state.speed=state.savedSpeed=lunaSpaceSpeed();state.depth=state.savedDepth=lunaSpaceDepth();
   if(state.loadError)state.message="Could not read appearance settings";
   else if(previewError)state.message="Could not preview appearance";
   LunaCubeWorkspace workspace={&state,appearanceWorkspaceDraw,appearanceWorkspaceInput,

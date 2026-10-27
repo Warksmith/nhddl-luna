@@ -24,6 +24,7 @@
 #endif
 #include "ui/options_menu.h"
 #include "ui/game_options.h"
+#include "ui/space_flight.h"
 #include "ui/view_scroll.h"
 #include "ui/pad.h"
 #include "ui/ui.h"
@@ -472,6 +473,10 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   if (view == UI_VIEW_3D)
     resetCaseGrid();
   libraryBackground = loadLibraryBackground(curTarget);
+  LunaAppearance libraryAppearance;
+  loadAppearance(curTarget,&libraryAppearance);
+  lunaSpaceSetSpeed(libraryAppearance.spaceSpeed);
+  lunaSpaceSetDepth(libraryAppearance.spaceDepth);
   if (setLibraryBackground((LibraryBackground)libraryBackground))
     libraryBackground = LIBRARY_BACKGROUND_STARS;
   orbsThemeSetting = loadAmbientOrbsTheme(curTarget);

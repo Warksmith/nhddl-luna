@@ -191,7 +191,7 @@ int uiCubePageLoop(const LunaCubePage *page,int *selected) {
 
 void uiCubeWorkspaceLoop(const LunaCubeWorkspace *workspace) {
   static CubeMenu menu;
-  cubeInit(&menu,uiNowMs(),0);cubeMaterialInit();
+  cubeInit(&menu,uiNowMs(),0);
   int previous=pollInput();
   for(;;) {
     int selection=workspace->selection(workspace->context);
@@ -205,7 +205,7 @@ void uiCubeWorkspaceLoop(const LunaCubeWorkspace *workspace) {
     cubeStep(&menu,uiNowMs());cubeDraw(&menu,NULL,0,NULL,workspace,NULL);
     int held=pollInput(),input=held&~previous;previous=held;
     if(menu.closing) {
-      if(menu.exit>=500) {cubeMaterialClose();return;}
+      if(menu.exit>=500)return;
     } else if(workspace->input(workspace->context,input))cubeClose(&menu,0);
   }
 }

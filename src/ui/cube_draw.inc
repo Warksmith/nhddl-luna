@@ -78,6 +78,12 @@ static void cubeDraw(CubeMenu *m,const char *status,int confirmShutdown,const Lu
   gsKit_set_primalpha(gsGlobal,GS_SETREG_ALPHA(0,1,0,1,0),0);
   float entry=cubeClamp(m->entry/500);
   float overall=entry*(m->entering?1-cubeClamp((m->exit-1140)/300):1-cubeClamp(m->exit/500));
+  float text=overall*(m->entering?1-cubeClamp(m->exit/200):1);
+  if(m->submenuOpen)text*=1-cubeSmooth(m->submenuAge/(CUBE_SUBMENU_MS*.6f));
+  if(workspace) {
+    workspace->draw(workspace->context,text);
+    goto present;
+  }
   CubeVec camera={0,0,0};
   float submenuProgress=m->submenuOpen?m->submenuAge/CUBE_SUBMENU_MS:0;
   if(m->submenuOpen) {
@@ -94,11 +100,11 @@ static void cubeDraw(CubeMenu *m,const char *status,int confirmShutdown,const Lu
     float t=cubeClamp(m->exit/1200),u=1-powf(1-t,3);
     camera=(CubeVec){m->cameraTarget.x*u,m->cameraTarget.y*u,m->cameraTarget.z*u};
   }
-  cubeSceneScale=workspace?.18f:1;
-  cubeSceneOffsetX=workspace?390:0;cubeSceneOffsetY=workspace?24:0;
+  cubeSceneScale=1;
+  cubeSceneOffsetX=cubeSceneOffsetY=0;
   CubeGlass scene[CUBE_COUNT];int order[CUBE_COUNT];
   for(int i=0;i<CUBE_COUNT;i++) {
-    float fade=overall*(workspace?.22f:1);
+    float fade=overall;
     if(m->submenuOpen) {
       if(i==m->selected%CUBE_COUNT)
         fade*=1-cubeSmooth((submenuProgress-.58f)/.42f);
@@ -114,12 +120,6 @@ static void cubeDraw(CubeMenu *m,const char *status,int confirmShutdown,const Lu
   }
   for(int i=0;i<CUBE_COUNT;i++)cubeGlassDraw(&scene[order[i]],camera);
   cubeRestoreGlassState();
-  float text=overall*(m->entering?1-cubeClamp(m->exit/200):1);
-  if(m->submenuOpen)text*=1-cubeSmooth(m->submenuAge/(CUBE_SUBMENU_MS*.6f));
-  if(workspace) {
-    workspace->draw(workspace->context,text);
-    goto present;
-  }
   cubeText(60,20,cubeColor(185,210,235,text),"LUNA");
   cubeText(175,page?105:128,cubeColor(232,232,70,text),lunaText(page?page->title:"System Configuration"));
   if(status)cubeText(320,53,cubeColor(215,229,244,text),status);

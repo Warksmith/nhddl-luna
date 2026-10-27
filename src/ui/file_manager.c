@@ -11,6 +11,7 @@
 #include "vmc_create.h"
 #include "vmc_storage.h"
 #include "ui/game_options.h"
+#include "ui/space_flight.h"
 #include <strings.h>
 #include "devices/devices.h"
 #include "devices/init.h"
@@ -2710,6 +2711,8 @@ int uiMainMenuLoop(int hasLibrary, Target *target) {
   }
   LunaAppearance appearance;
   loadAppearance(target,&appearance);
+  lunaSpaceSetSpeed(appearance.spaceSpeed);
+  lunaSpaceSetDepth(appearance.spaceDepth);
   uiRingSetColor((LunaRingColor)appearance.ringColor);
   for (;;) {
     int action = uiRingMenuLoop(hasLibrary, startMenuStatus(hasLibrary));
