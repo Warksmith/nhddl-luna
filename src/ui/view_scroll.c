@@ -31,6 +31,12 @@ static GSTEXTURE configInverseTexture;
 static GSTEXTURE configWorkTexture[2];
 static u32 configWorkZ;
 static int configCaptureReady;
+/* Settings may reuse these scratch pages after drawing the background. */
+int uiBorrowBackgroundWorkPages(GSTEXTURE *pages) {
+  if (!configCaptureReady) return 0;
+  memcpy(pages, configWorkTexture, sizeof(configWorkTexture));
+  return 1;
+}
 static float configRodVerts[16][4][4];
 static float configRodNormals[16][4];
 static float configRodUvs[16][4][4];
@@ -390,7 +396,7 @@ GlassColorPreset getGlassColorPreset(void) {
 
 uint64_t glassPresetColor(int red, int green, int blue, int alpha) {
   static const int palette[GLASS_COLOR_COUNT][3] = {
-      {0, 0, 0}, {0xE0, 0xE0, 0xE0}, {0x78, 0x78, 0x78}};
+      {0, 0, 0}, {0xE0, 0xE0, 0xE0}, {0x78, 0x78, 0x78}, {0x38, 0xFF, 0x68}};
   if (glassColorPreset == GLASS_COLOR_ORIGINAL)
     return GS_SETREG_RGBA(red, green, blue, alpha);
   int brightness = red;
@@ -639,15 +645,27 @@ void drawGlassDiamond(int centerX, int centerY, int radius, int z, uint64_t colo
   }
 }
 
-void drawGlassPanelWithFillAlpha(int x1, int y1, int x2, int y2, int z, int fillAlpha) {
+void drawGlassPanelWithOpacity(int x1, int y1, int x2, int y2, int z,
+                              int fillAlpha, float opacity) {
+  opacity=fmaxf(0,fminf(1,opacity));
+  if(opacity<=0)return;
+  fillAlpha=(int)(fillAlpha*opacity);
   const uint64_t glass = glassPresetColor(0x05, 0x0D, 0x22, fillAlpha);
   const uint64_t glassInner = glassPresetColor(0x18, 0x46, 0x70,
                                                (0x14 * fillAlpha) / 0x54);
-  const uint64_t rim = glassPresetColor(0x58, 0xA0, 0xC8, 0x28);
-  const uint64_t rimFade = glassPresetColor(0x38, 0x78, 0xA0, 0x14);
-  const uint64_t edge = glassPresetColor(0x24, 0x68, 0x98, 0x24);
+  const uint64_t rim = glassPresetColor(0x58, 0xA0, 0xC8, (int)(0x28*opacity));
+  const uint64_t rimFade = glassPresetColor(0x38, 0x78, 0xA0, (int)(0x14*opacity));
+  const uint64_t edge = glassPresetColor(0x24, 0x68, 0x98, (int)(0x24*opacity));
 
   gsKit_prim_sprite(gsGlobal, x1, y1, x2, y2, z, glass);
+  if (glassColorPreset == GLASS_COLOR_CYBER && fillAlpha > 0) {
+    // Screen-aligned pairs stay steady across both fields of interlaced video.
+    // Keep the CRT texture behind text, artwork and the existing panel rim.
+    const uint64_t phosphor = glassPresetColor(0x38, 0xFF, 0x68,
+                                                0x08 * fillAlpha / 0x54);
+    for (int y = ((y1 + 9) / 6) * 6; y + 2 <= y2 - 4; y += 6)
+      gsKit_prim_sprite(gsGlobal, x1 + 4, y, x2 - 4, y + 2, z + 1, phosphor);
+  }
   gsKit_prim_sprite(gsGlobal, x1 + 4, y1 + 4, x2 - 4, y1 + 8, z + 1, glassInner);
   // Two matching scanlines per band keep the rim stable in interlaced output.
   gsKit_prim_sprite(gsGlobal, x1, y1, x2, y1 + 2, z + 2, rim);
@@ -655,6 +673,10 @@ void drawGlassPanelWithFillAlpha(int x1, int y1, int x2, int y2, int z, int fill
   gsKit_prim_sprite(gsGlobal, x1, y1 + 2, x1 + 2, y2, z + 2, rim);
   gsKit_prim_sprite(gsGlobal, x1, y2 - 2, x2, y2, z + 1, edge);
   gsKit_prim_sprite(gsGlobal, x2 - 2, y1, x2, y2, z + 1, edge);
+}
+
+void drawGlassPanelWithFillAlpha(int x1, int y1, int x2, int y2, int z, int fillAlpha) {
+  drawGlassPanelWithOpacity(x1,y1,x2,y2,z,fillAlpha,1);
 }
 
 void drawGlassPanel(int x1, int y1, int x2, int y2, int z) {

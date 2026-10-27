@@ -13,6 +13,7 @@
 #include <gsToolkit.h>
 #include <kernel.h>
 #include <malloc.h>
+#include <math.h>
 #include <png.h>
 #include <stdlib.h>
 
@@ -319,6 +320,27 @@ void drawMenuRowSelector(int left, int top, int right) {
                     GS_SETREG_RGBA(0xB0, 0xE8, 0xFF, 0x78));
 }
 
+void drawListScrollbar(int x, int top, int bottom, int total, int first,
+                       int visible, int z) {
+  if (visible <= 0 || total <= visible || bottom <= top)
+    return;
+  const int height = bottom - top;
+  int thumb = (int)((int64_t)height * visible / total);
+  if (thumb < 16) thumb = 16;
+  if (thumb > height) thumb = height;
+  if (first < 0) first = 0;
+  if (first > total - visible) first = total - visible;
+  const int y = top + (int)((int64_t)(height - thumb) * first /
+                             (total - visible));
+  // Vertical edges and a substantial thumb stay legible on interlaced output.
+  gsKit_prim_sprite(gsGlobal, x + 2, top, x + 4, bottom, z,
+                    glassPresetColor(0x78, 0x9A, 0xB0, 0x24));
+  gsKit_prim_sprite(gsGlobal, x, y, x + 6, y + thumb, z + 1,
+                    glassPresetColor(0x78, 0xBD, 0xD7, 0x58));
+  gsKit_prim_sprite(gsGlobal, x + 2, y, x + 4, y + thumb, z + 2,
+                    glassPresetColor(0xB0, 0xE8, 0xFF, 0x70));
+}
+
 void drawPromptBar(int left, int top, int right, int bottom, int z,
                    uint64_t labelColor, PromptBar bar) {
   if (right <= left || bottom <= top)
@@ -365,6 +387,18 @@ const BMFontChar *getGlyph(uint32_t character) {
   return NULL;
 }
 
+static uint64_t glassTextColor(uint64_t color) {
+  if (getGlassColorPreset() != GLASS_COLOR_CYBER)
+    return color;
+  const int red = color & 0xFF;
+  const int green = (color >> 8) & 0xFF;
+  const int blue = (color >> 16) & 0xFF;
+  // Keep warning/error hues and text opacity; only neutral/cool ink is green.
+  if (red > green && red > blue)
+    return color;
+  return glassPresetColor(red, green, blue, (color >> 24) & 0xFF);
+}
+
 // Draws glyph at specified coordinates
 static void drawGlyph(const BMFontChar *glyph, float x, float y, int z, uint64_t color) {
   gsKit_prim_sprite_texture(gsGlobal, fontPages[glyph->page],   // font page
@@ -392,6 +426,7 @@ static void beginFontDraw(void) {
 // Draws the text with specified max dimensions relative to x and y
 // Returns the bottom Y coordinate of the last line that can be used to draw the next text
 int drawText(int x, int y, int z, int maxWidth, int maxHeight, uint64_t color, const char *text) {
+  color = glassTextColor(color);
   int curX = x;
   const BMFontChar *glyph;
   const int previousAlphaTest = gsGlobal->Test->ATST;
@@ -487,6 +522,7 @@ float getLineWidth(const char *text) {
 // Returns the bottom Y coordinate of the last line that can be used to draw the next text.
 // Use the faster drawText method if window limits are not important.
 int drawTextWindow(int x1, int y1, int x2, int y2, int z, uint64_t color, uint8_t alignment, const char *text) {
+  color = glassTextColor(color);
   if (!x2 && !y2) {
     // If window limits are not set, use faster drawing function
     return drawText(x1, y1, z, 0, 0, color, text);
@@ -588,6 +624,7 @@ int drawTextWindow(int x1, int y1, int x2, int y2, int z, uint64_t color, uint8_
 
 void drawTextLineScaled(int x, int y, int right, int z, float scale,
                         uint64_t color, const char *text) {
+  color = glassTextColor(color);
   const int previousAlphaTest = gsGlobal->Test->ATST;
   const int previousAlphaReference = gsGlobal->Test->AREF;
   const int previousAlphaFail = gsGlobal->Test->AFAIL;
@@ -622,7 +659,57 @@ void drawTextLineScaled(int x, int y, int right, int z, float scale,
   gsKit_set_primalpha(gsGlobal, GS_SETREG_ALPHA(0, 1, 0, 1, 0), 0);
 }
 
+void drawTextLineScaledCrisp(int x, int y, int right, int z, float scale,
+                        uint64_t color, const char *text) {
+  color = glassTextColor(color);
+  const int previousAlphaTest = gsGlobal->Test->ATST;
+  const int previousAlphaReference = gsGlobal->Test->AREF;
+  const int previousAlphaFail = gsGlobal->Test->AFAIL;
+  float curX = x;
+  beginFontDraw();
+  const char *cursor = text;
+  while (*cursor) {
+    uint32_t character = lunaUTF8Next(&cursor);
+    if (character == '\n') break;
+    const BMFontChar *glyph = getGlyph(character);
+    if (!glyph) continue;
+    float left = curX + glyph->xoffset * scale;
+    float top = y + glyph->yoffset * scale;
+    if (left + glyph->width * scale > right) break;
+    float endX=left+glyph->width*scale,endY=top+glyph->height*scale;
+    GSTEXTURE *page=fontPages[glyph->page];
+    int savedFilter=page->Filter;
+    {
+      /* Source UVs include the hardware-required extra atlas texel. Give
+       * that transparent padding its matching destination extent too,
+       * instead of compressing width+1 texels into width pixels. */
+      endX=roundf(endX+scale);endY=roundf(endY+scale);
+      left=roundf(left);top=roundf(top);
+      page->Filter=GS_FILTER_NEAREST;
+    }
+    gsKit_prim_sprite_texture(gsGlobal, page,
+        left, top, glyph->x, glyph->y,
+        endX, endY,
+        glyph->x + glyph->width + 1, glyph->y + glyph->height + 1, z, color);
+    page->Filter=savedFilter;
+    curX += glyph->xadvance * scale;
+    if (glyph->kernings && *cursor) {
+      const char *next = cursor;
+      uint32_t nextCharacter = lunaUTF8Next(&next);
+      for (int k = 0; k < glyph->kerningsCount; k++)
+        if (glyph->kernings[k].secondChar == nextCharacter)
+          curX += glyph->kernings[k].amount * scale;
+    }
+  }
+  gsGlobal->Test->ATST = previousAlphaTest;
+  gsGlobal->Test->AREF = previousAlphaReference;
+  gsGlobal->Test->AFAIL = previousAlphaFail;
+  gsKit_set_test(gsGlobal, GS_ATEST_ON);
+  gsKit_set_primalpha(gsGlobal, GS_SETREG_ALPHA(0, 1, 0, 1, 0), 0);
+}
+
 int drawTextMarquee(int x1, int y, int x2, int z, uint64_t color, const char *text, int scrollX) {
+  color = glassTextColor(color);
   float curX = x1 - scrollX;
   const int previousAlphaTest = gsGlobal->Test->ATST;
   const int previousAlphaReference = gsGlobal->Test->AREF;
@@ -709,11 +796,7 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
   }
 
   if (setjmp(png_jmpbuf(png_ptr))) {
-    free(row_pointers);
-    free(pixelBuffer);
-    png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
-    fclose(file);
-    return -1;
+    goto failed;
   }
 
   png_init_io(png_ptr, file);
@@ -772,7 +855,7 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
 
   for (int pass = 0; pass < passes; pass++) {
     for (row = 0; row < height; row++) {
-      artworkSliceCheckpoint();
+      if (artworkSliceCheckpoint()) goto failed;
       png_read_row(png_ptr, row_pointers[row], NULL);
     }
   }
@@ -784,7 +867,7 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
   struct pixel *pixels = (struct pixel *)pixelBuffer;
 
   for (i = 0; i < height; i++) {
-    artworkSliceCheckpoint();
+    if (artworkSliceCheckpoint()) goto failed;
     for (j = 0; j < width; j++) {
       uint8_t sourceAlpha = row_pointers[i][4 * j + 3];
       if (whiteTransparentRgb && sourceAlpha == 0) {
@@ -822,9 +905,17 @@ static int gsKit_texture_png_mem(GSGLOBAL *gsGlobal, GSTEXTURE *texture, void *b
   }
 
   return 0;
+
+failed:
+  free(row_pointers);
+  free(pixelBuffer);
+  png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
+  fclose(file);
+  return -1;
 }
 
 static int loadPNGTextureRGBAInternal(GSGLOBAL *gsGlobal, GSTEXTURE *texture, const char *path, int upload) {
+  if (artworkSliceCheckpoint()) return -1;
   FILE *file = fopen(path, "rb");
   void *buffer;
   long fileSize;
@@ -846,7 +937,8 @@ static int loadPNGTextureRGBAInternal(GSGLOBAL *gsGlobal, GSTEXTURE *texture, co
   }
   fclose(file);
 
-  result = gsKit_texture_png_mem(gsGlobal, texture, buffer, fileSize, 0, 0);
+  result = artworkSliceCheckpoint() ? -1 :
+      gsKit_texture_png_mem(gsGlobal, texture, buffer, fileSize, 0, 0);
   if (result == 0 &&
       (fitTextureToVram(gsGlobal, texture) < 0 ||
        (upload && !bindTextureSafe(gsGlobal, texture)))) {

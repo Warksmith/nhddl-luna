@@ -1,5 +1,6 @@
 // LUNA appearance preferences: one validated record per metadata location.
 #include "ui/appearance.h"
+#include "ui/ring_menu.h"
 #include "ui/view_state.h"
 #include "devices/devices.h"
 #include "options.h"
@@ -12,7 +13,7 @@
 #define NEWLIB_PORT_AWARE
 #include <fileXio_rpc.h>
 
-#define APPEARANCE_VERSION 1U
+#define APPEARANCE_VERSION 2U
 #define RECORD_LIMIT 2048
 #define RECORD_WRITE_SIZE 512
 static const char *const recordNames[] = {
@@ -22,13 +23,15 @@ static const char *const backgrounds[] = {
   "stars", "orbs", "red-clouds", "midnight-cubes", "system-config", "neo",
   "aurora", "ronin", "gridrunner", "torch", "tempest", "space-flight"
 };
-static const char *const glasses[] = {"original", "white-gray", "black"};
+static const char *const glasses[] = {"original", "white-gray", "black", "cyber"};
 static const char *const fonts[] = {"dejavu", "psbbn"};
 static const char *const switches[] = {"off", "on"};
 static const char *const layouts[] = {"separate", "overlap"};
 static const char *const cases[] = {"tall", "square"};
 static const char *const themes[] = {"luna", "ps2-original"};
 static const char *const colors[] = {"original", "cyan", "violet", "rose", "green", "gold", "white"};
+static const char *const ringColors[] = {"original","cyan","blue","violet","rose","green","white"};
+_Static_assert(sizeof(ringColors)/sizeof(*ringColors)==LUNA_RING_COLOR_COUNT,"Update ring color storage names");
 static const char *const views[UI_VIEW_ID_LIMIT] = {
   [UI_VIEW_CLASSIC] = "classic", [UI_VIEW_PSBBN] = "collection",
   [UI_VIEW_ORBIT] = "orbit", [UI_VIEW_ORBS] = "scroll", [UI_VIEW_3D] = "3d"
@@ -58,7 +61,7 @@ static const AppearanceField fields[] = {
   FIELD(collectionGameList, switches, 0), FIELD(ps1CaseStyle, cases, 0),
   FIELD(orbsTheme, themes, 0), FIELD(orbsAppearance, themes, 0),
   FIELD(orbsColor, colors, 0), FIELD(tailsColor, colors, 0),
-  FIELD(orbShapes, shapes, 1)
+  FIELD(orbShapes, shapes, 1), FIELD(ringColor, ringColors, 0)
 };
 #define FIELD_COUNT (sizeof(fields)/sizeof(*fields))
 typedef struct {
@@ -170,7 +173,7 @@ static int readRecord(const char *path, AppearanceRecord *record) {
   if (result) return result;
   // Protect future formats even when an older supported backup exists.
   if (version > APPEARANCE_VERSION) return -ENOTSUP;
-  if (version != APPEARANCE_VERSION) return -EINVAL;
+  if (version != 1U && version != APPEARANCE_VERSION) return -EINVAL;
   char *footer = strstr(bytes, "\nchecksum=");
   if (!footer || strlen(footer + 1) != 18 || footer[18] != '\n') return -EINVAL;
   char *hex = footer + 10;
@@ -201,7 +204,10 @@ static int readRecord(const char *path, AppearanceRecord *record) {
     if (!lineEnd) break;
     line = lineEnd + 1;
   }
-  return seen == (1U << FIELD_COUNT) - 1U && validSettings(&record->settings) ? 0 : -EINVAL;
+  // Version 1 has no ring field; zero initialization preserves the original
+  // blue ring. Version 2 requires every field, including its stored color.
+  uint32_t required=(1U << (version==1U?FIELD_COUNT-1:FIELD_COUNT))-1U;
+  return seen == required && validSettings(&record->settings) ? 0 : -EINVAL;
 }
 
 static int serializeRecord(const AppearanceRecord *record, char bytes[RECORD_LIMIT]) {

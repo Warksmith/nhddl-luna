@@ -5,6 +5,9 @@
 #include <stddef.h>
 
 static LunaMotion camera;
+static LunaMotion menuReturn;
+static int menuReturning;
+float lunaCameraDrawScale = 1.0f;
 static uint32_t lastMs, pendingTicks;
 static int initialized, wasOpen, armed, applied, savedOffsetX;
 static LunaMotion viewMotion;
@@ -20,10 +23,28 @@ static uint32_t channelAgeMs;
 static int channelTarget = -1;
 
 static void restoreCameraOffset(void) {
+  lunaCameraDrawScale = 1.0f;
   if (applied) {
     gsGlobal->OffsetX = savedOffsetX;
     applied = 0;
   }
+}
+
+void lunaCameraMenuReturnCancel(void) {
+  menuReturning = 0;
+  lunaMotionReset(&menuReturn);
+  lunaCameraDrawScale = 1.0f;
+}
+
+void lunaCameraMenuReturnStart(uint32_t nowMs) {
+  lunaCameraMenuReturnCancel();
+  menuReturn.position[0] = menuReturn.previous[0] = 0.78f;
+  const float destination[3] = {1.0f, 0, 0};
+  lunaMotionRetarget(&menuReturn, destination, 750.0f, 1.0f);
+  menuReturning = 1;
+  // The first revealed frame starts far away, even after a long menu visit.
+  lastMs = nowMs;
+  pendingTicks = 0;
 }
 
 void lunaCameraChannelCancel(void) {
@@ -149,10 +170,13 @@ void lunaCameraSceneBegin(int open, uint32_t nowMs) {
   pendingTicks += elapsed * 60U;
   while (pendingTicks >= 1000U) {
     lunaMotionTick(&camera);
+    if (menuReturning) lunaMotionTick(&menuReturn);
     if (viewCover && !viewSettled) lunaMotionTick(&viewMotion);
     if (lunaCameraChannelActive()) lunaMotionTick(&channelMotion);
     pendingTicks -= 1000U;
   }
+  if (menuReturning && menuReturn.position[0] >= 0.999f)
+    lunaCameraMenuReturnCancel();
   if (viewCover) {
     turnMs += elapsed;
     if (turnMs >= TURN_HALF_MS) {
@@ -188,6 +212,7 @@ void lunaCameraSceneAfterBackground(void) {
   savedOffsetX = gsGlobal->OffsetX;
   const float scale = (float)gsGlobal->Width / 640.0f;
   gsGlobal->OffsetX += (int)lroundf(camera.position[0] * scale * 16.0f);
+  lunaCameraDrawScale = menuReturning ? menuReturn.position[0] : 1.0f;
   applied = 1;
 }
 

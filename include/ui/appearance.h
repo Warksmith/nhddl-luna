@@ -9,6 +9,7 @@ typedef struct {
   uint32_t background, glassColor, font, ambientSound, enabledViews;
   uint32_t classicOverlap, collectionGameList, ps1CaseStyle;
   uint32_t orbsTheme, orbsAppearance, orbsColor, tailsColor, orbShapes;
+  uint32_t ringColor;
 } LunaAppearance;
 
 // Always fills settings, including legacy/default fallback on read errors.

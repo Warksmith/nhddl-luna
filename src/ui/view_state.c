@@ -43,7 +43,7 @@ static const char *const viewNames[UI_VIEW_ID_LIMIT] = {
     [UI_VIEW_GRID] = "grid", [UI_VIEW_ORBIT] = "orbit",
     [UI_VIEW_ORBS] = "orbs", [UI_VIEW_3D] = "3d"};
 static const char *const glassColorNames[GLASS_COLOR_COUNT] = {
-    "original", "white-gray", "black"};
+    "original", "white-gray", "black", "cyber"};
 static const char *const uiFontNames[UI_FONT_COUNT] = {
     "dejavu", "psbbn"};
 static const char *const orbsColorNames[ORBS_COLOR_COUNT] = {
@@ -521,6 +521,7 @@ static int legacyAmbientSoundEnabled(Target *target) {
 
 
 void loadLegacyAppearance(Target *target, LunaAppearance *settings) {
+  settings->ringColor = 0;
   settings->background = legacyLibraryBackground(target);
   settings->glassColor = legacyGlassColorPreset(target);
   settings->font = legacyUIFont(target);

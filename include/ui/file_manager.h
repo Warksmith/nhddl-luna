@@ -3,7 +3,8 @@
 
 // Returns 1 for Exit, 0 for the library, or STORAGE_UI_REFRESH for a rescan.
 // With no library, the menu remains open until Exit is chosen.
-int uiMainMenuLoop(int hasLibrary);
+#include "target.h"
+int uiMainMenuLoop(int hasLibrary, Target *target);
 #include "ui/game_options.h"
 void uiVmcSetLibrary(TargetList *library);
 int uiVmcPs2Slot(Target *target, ArgumentList *arguments, LunaGameOptions *options, int slot);

@@ -12,6 +12,8 @@
 #include "ui/wallpapers.h"
 #include "ui/art_cache.h"
 #include "ui/file_manager.h"
+#include "ui/ring_menu.h"
+#include "ui/appearance.h"
 #include "vmc_storage.h"
 #include "storage.h"
 #include "ui/graphics.h"
@@ -356,7 +358,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   initPad();
 
   if (titles->total == 0) {
-    res = uiMainMenuLoop(0);
+    res = uiMainMenuLoop(0,NULL);
     if (res != STORAGE_UI_REFRESH) res = 0;
     goto exit;
   }
@@ -1439,12 +1441,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     } else if ((input & PAD_TRIANGLE) && titles->total > 0) {
       prevInput = 0; // Reset previous input
       // Enter title options screen
-      if ((res = uiTitleOptionsLoop(curTarget, &classicArtOverlap,
-                                    &libraryBackground, &glassColorSetting,
-                                    &fontSetting, &ambientEnabled, &orbsThemeSetting,
-                                    &orbsAppearanceSetting, &orbsColorSetting,
-                                    &tailsColorSetting, &enabledOrbShapes,
-                                    &enabledViews)) < 0) {
+      if ((res = uiTitleOptionsLoop(curTarget)) < 0) {
         // Something went wrong, main loop must exit immediately
         ambientStop();
         freeTargetList(favoriteTitles);
@@ -1467,7 +1464,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       input = 0;
     } else if (input & PAD_START) {
       uiVmcSetLibrary(allTitles);
-      int menuResult = uiMainMenuLoop(1);
+      int menuResult = uiMainMenuLoop(1,curTarget);
       uiVmcSetLibrary(NULL);
       if (menuResult == STORAGE_UI_REFRESH) {
         storageRememberSelection(curTarget, view);
@@ -1476,9 +1473,24 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       }
       if (menuResult)
         break;
+      // Appearance belongs to the Start menu; refresh the library's local
+      // copies after it returns without changing the selected game or view.
+      LunaAppearance appearance;
+      loadAppearance(curTarget,&appearance);
+      classicArtOverlap=appearance.classicOverlap;
+      libraryBackground=appearance.background;glassColorSetting=appearance.glassColor;
+      fontSetting=appearance.font;ambientEnabled=appearance.ambientSound;
+      orbsThemeSetting=appearance.orbsTheme;orbsAppearanceSetting=appearance.orbsAppearance;
+      orbsColorSetting=appearance.orbsColor;tailsColorSetting=appearance.tailsColor;
+      enabledOrbShapes=appearance.orbShapes;enabledViews=appearance.enabledViews;
+      if (!(enabledViews & (1U << view))) forceViewSwitch=1;
+      libraryReturnFadeStartMs=uiNowMs();
       // Prevent the menu selection press from acting on a library title.
       while (pollInput() & (PAD_CROSS | PAD_CIRCLE | PAD_TRIANGLE | PAD_START))
         usleep(1000);
+#ifdef LUNA_CAMERA_ANIMATIONS
+      lunaCameraMenuReturnStart(uiNowMs());
+#endif
       prevInput = 0;
       frameCount = 0;
       input = 0;
@@ -1487,6 +1499,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
 
 exit:
 #ifdef LUNA_CAMERA_ANIMATIONS
+  lunaCameraMenuReturnCancel();
   lunaCameraChannelCancel();
   lunaCameraViewCancel();
 #endif

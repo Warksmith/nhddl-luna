@@ -1,0 +1,250 @@
+/* Standalone launcher appearance editor; game-specific options live elsewhere. */
+#include "ui/appearance_menu.h"
+#include "ui/appearance.h"
+#include "ui/ring_menu.h"
+#include "ui/cube_menu.h"
+#include "ui/view_internal.h"
+#include "ui/view_state.h"
+#include "ui/language.h"
+#include "ui/pad.h"
+#include "ui/navigation.h"
+#include "ui/ambient.h"
+#include "ui/space_flight.h"
+#include "options.h"
+#include <libpad.h>
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+enum { AP_BACKGROUND,AP_VIEWS,AP_COLORS,AP_EFFECTS,AP_TEXT,AP_SOUND,AP_APPLY,AP_DISCARD };
+static const char *const categories[]={"Backgrounds","Library Views","Interface Colors",
+  "Background Effects","Text","Ambient Sound","Apply","Discard"};
+static const char *const backgrounds[]={"Stars & cubes","Ambient Orbs","Red Clouds","Midnight Cubes",
+  "System Configuration","Neo","Aurora","Ronin","Gridrunner","Torch","Tempest","Space Flight"};
+static const char *const colors[]={"Original","Cyan","Violet","Rose","Green","Gold","White"};
+static const char *const shapes[]={"Diamond","Cube","Octahedron","Sphere","LUNA","Skull","Atom","Iron cross"};
+typedef struct {
+  Target *target;
+  LunaAppearance saved,pending,runtime;
+  int category,loadError;
+  int speed,depth,savedSpeed,savedDepth;
+  const char *message;
+  char value[96];
+  int focus,rows[6],action,exitChoice;
+} AppearanceEditor;
+
+static void appearanceReleaseButtons(void) {
+  while(pollInput()&(PAD_CROSS|PAD_CIRCLE|PAD_TRIANGLE|PAD_START))usleep(1000);
+}
+static int appearanceDirty(const AppearanceEditor *s) {
+  return memcmp(&s->saved,&s->pending,sizeof(s->saved))||
+    s->speed!=s->savedSpeed||s->depth!=s->savedDepth;
+}
+static int appearancePreview(AppearanceEditor *s,const LunaAppearance *a) {
+  const LunaAppearance *old=&s->runtime;
+  if(a->background!=old->background&&setLibraryBackground((LibraryBackground)a->background)) {
+    setLibraryBackground((LibraryBackground)old->background);return -1;
+  }
+  if(a->font!=old->font&&setUIFont((UIFont)a->font)) {
+    setLibraryBackground((LibraryBackground)old->background);return -1;
+  }
+  if(a->orbsAppearance!=old->orbsAppearance&&setAmbientOrbsAppearance((AmbientOrbsAppearance)a->orbsAppearance)) {
+    setLibraryBackground((LibraryBackground)old->background);setUIFont((UIFont)old->font);return -1;
+  }
+  setGlassColorPreset((GlassColorPreset)a->glassColor);
+  uiRingSetColor((LunaRingColor)a->ringColor);
+  setClassicArtOverlap(a->classicOverlap);setPs1CaseStyle((Ps1CaseStyle)a->ps1CaseStyle);
+  setCollectionGameList(a->collectionGameList);ambientSetEnabled(a->ambientSound);
+  if(a->orbsTheme!=old->orbsTheme)setAmbientOrbsTheme((AmbientOrbsTheme)a->orbsTheme,uiNowMs());
+  if(a->orbShapes!=old->orbShapes)setAmbientOrbsShapes(a->orbShapes,uiNowMs());
+  setAmbientOrbsColor(ORBS_COLOR_PART_ORBS,(AmbientOrbsColor)a->orbsColor);
+  setAmbientOrbsColor(ORBS_COLOR_PART_TAILS,(AmbientOrbsColor)a->tailsColor);
+  s->runtime=*a;return 0;
+}
+static int appearanceApply(AppearanceEditor *s) {
+  if(s->loadError) {s->message="Could not read appearance settings";return -1;}
+  if(saveAppearance(s->target,&s->pending)) {s->message="Could not save appearance settings";return -1;}
+  s->saved=s->pending;s->savedSpeed=s->speed;s->savedDepth=s->depth;
+  s->message="Saved";return 0;
+}
+static int appearanceDiscard(AppearanceEditor *s) {
+  if(appearancePreview(s,&s->saved)) {s->message="Could not restore appearance";return -1;}
+  s->pending=s->saved;s->speed=s->savedSpeed;s->depth=s->savedDepth;
+  lunaSpaceSetSpeed(s->speed);lunaSpaceSetDepth(s->depth);s->message=NULL;return 0;
+}
+static const char *appearanceHubDescription(void *context,int row) {
+  AppearanceEditor *s=context;
+  if(s->message)return s->message;
+  static const char *const descriptions[]={
+    "Preview the background used throughout LUNA.","Choose library views and cover layouts.",
+    "Choose the glass tint and Start-menu ring color.","Tune Ambient Orbs or Space Flight.",
+    "Choose the interface font. Wide menu headings stay unchanged.","Play ambient music while browsing.",
+    "Save your previewed changes.","Restore the last saved appearance."};
+  return descriptions[row];
+}
+static int appearanceRowCount(AppearanceEditor *s) {
+  if(s->category==AP_VIEWS)return UI_VIEW_COUNT+3;
+  if(s->category==AP_COLORS)return 2;
+  if(s->category==AP_EFFECTS)return s->pending.background==LIBRARY_BACKGROUND_SPACE_FLIGHT?2:4+ORB_SHAPE_PLAYTIME;
+  return 1;
+}
+static const char *appearanceRowLabel(void *context,int row) {
+  AppearanceEditor *s=context;
+  switch(s->category) {
+    case AP_BACKGROUND:return "Background";
+    case AP_COLORS:return row?"Ring color":"Glass color";
+    case AP_TEXT:return "Font";
+    case AP_SOUND:return "Ambient sound";
+    case AP_VIEWS:
+      if(row<UI_VIEW_COUNT)return lunaNavViewLabel(lunaViewCycleOrder[row]);
+      return (const char *const[]){"Cover and disc layout","PS1 case style","Collections game list"}[row-UI_VIEW_COUNT];
+    default:
+      if(s->pending.background==LIBRARY_BACKGROUND_SPACE_FLIGHT)return row?"Depth":"Speed";
+      if(row<4)return (const char *const[]){"Behavior","Appearance","Orb color","Tail color"}[row];
+      return shapes[row-4];
+  }
+}
+static const char *appearanceRowValue(void *context,int row) {
+  AppearanceEditor *s=context;LunaAppearance *a=&s->pending;int value=0;
+  switch(s->category) {
+    case AP_BACKGROUND:return backgrounds[a->background];
+    case AP_COLORS:return row?
+      (const char *const[]){"Original","Cyan","Blue","Violet","Rose","Green","White"}[a->ringColor]:
+      (const char *const[]){"Original","Luminous","Cosmic","Cyber"}[a->glassColor];
+    case AP_TEXT:return a->font==UI_FONT_PSBBN?"PSBBN":"DejaVu";
+    case AP_SOUND:value=a->ambientSound;break;
+    case AP_VIEWS:
+      if(row<UI_VIEW_COUNT)value=(a->enabledViews>>lunaViewCycleOrder[row])&1;
+      else if(row==UI_VIEW_COUNT)return a->classicOverlap?"Overlap":"Separate";
+      else if(row==UI_VIEW_COUNT+1)return a->ps1CaseStyle==PS1_CASE_SQUARE?"Square":"Tall";
+      else value=a->collectionGameList;
+      break;
+    default:
+      if(a->background==LIBRARY_BACKGROUND_SPACE_FLIGHT) {
+        snprintf(s->value,sizeof(s->value),"%d",row?s->depth:s->speed);return s->value;
+      }
+      if(a->background!=LIBRARY_BACKGROUND_ORBS)return "Ambient Orbs required";
+      if(row==0)return a->orbsTheme==ORBS_THEME_LUNA?"LUNA":"PS2 original";
+      if(row==1)return a->orbsAppearance==ORBS_APPEARANCE_LUNA?"LUNA":"PS2 original";
+      if(row<4)return a->orbsAppearance==ORBS_APPEARANCE_PS2_ORIGINAL?"Original colors":colors[row==2?a->orbsColor:a->tailsColor];
+      if(a->orbsTheme!=ORBS_THEME_LUNA)return "LUNA behavior required";
+      value=(a->orbShapes>>(row-4))&1;
+  }
+  return value?"On":"Off";
+}
+static const char *appearanceRowDescription(void *context,int row) {
+  AppearanceEditor *s=context;
+  if(s->message)return s->message;
+  if(s->category==AP_COLORS&&row==1)return "Changes the Start-menu ring and its fading copies.";
+  if(s->category==AP_EFFECTS) {
+    if(s->pending.background==LIBRARY_BACKGROUND_SPACE_FLIGHT)return "Space Flight speed and depth are session settings.";
+    if(s->pending.background!=LIBRARY_BACKGROUND_ORBS)return "Choose Ambient Orbs or Space Flight under Backgrounds.";
+    if(row>=4)return "Choose LUNA formations. All off keeps playtime.";
+    if(row>=2&&s->pending.orbsAppearance==ORBS_APPEARANCE_PS2_ORIGINAL)return "PS2 original appearance uses its original colors.";
+  }
+  return "Left / Right or Cross previews a change. Circle returns.";
+}
+static void appearanceAdjust(void *context,int row,int direction) {
+  AppearanceEditor *s=context;LunaAppearance candidate=s->pending;s->message=NULL;
+  switch(s->category) {
+    case AP_BACKGROUND:candidate.background=(candidate.background+LIBRARY_BACKGROUND_COUNT+direction)%LIBRARY_BACKGROUND_COUNT;break;
+    case AP_COLORS:
+      if(row)candidate.ringColor=(candidate.ringColor+LUNA_RING_COLOR_COUNT+direction)%LUNA_RING_COLOR_COUNT;
+      else candidate.glassColor=(candidate.glassColor+GLASS_COLOR_COUNT+direction)%GLASS_COLOR_COUNT;
+      break;
+    case AP_TEXT:candidate.font=(candidate.font+UI_FONT_COUNT+direction)%UI_FONT_COUNT;break;
+    case AP_SOUND:candidate.ambientSound^=1;break;
+    case AP_VIEWS:
+      if(row<UI_VIEW_COUNT) {
+        uint32_t bit=1U<<lunaViewCycleOrder[row];
+        if(candidate.enabledViews==bit) {s->message="Keep at least one library view enabled.";return;}
+        candidate.enabledViews^=bit;
+      } else if(row==UI_VIEW_COUNT)candidate.classicOverlap^=1;
+      else if(row==UI_VIEW_COUNT+1)candidate.ps1CaseStyle^=1;
+      else candidate.collectionGameList^=1;
+      break;
+    default:
+      if(candidate.background==LIBRARY_BACKGROUND_SPACE_FLIGHT) {
+        if(row) {s->depth+=direction;lunaSpaceSetDepth(s->depth);s->depth=lunaSpaceDepth();}
+        else {s->speed+=direction;lunaSpaceSetSpeed(s->speed);s->speed=lunaSpaceSpeed();}
+        return;
+      }
+      if(candidate.background!=LIBRARY_BACKGROUND_ORBS)return;
+      if(row==0)candidate.orbsTheme^=1;
+      else if(row==1)candidate.orbsAppearance^=1;
+      else if(row<4) {
+        if(candidate.orbsAppearance==ORBS_APPEARANCE_PS2_ORIGINAL)return;
+        uint32_t *color=row==2?&candidate.orbsColor:&candidate.tailsColor;
+        *color=(*color+ORBS_COLOR_COUNT+direction)%ORBS_COLOR_COUNT;
+      } else {
+        if(candidate.orbsTheme!=ORBS_THEME_LUNA)return;
+        candidate.orbShapes^=1U<<(row-4);
+      }
+  }
+  if(appearancePreview(s,&candidate)) {s->message="Could not preview appearance";return;}
+  s->pending=candidate;
+}
+#include "appearance_workspace.inc"
+int uiAppearanceLoop(Target *target) {
+  AppearanceEditor state={.target=target};
+  state.loadError=loadAppearance(target,&state.saved);
+  state.pending=state.runtime=state.saved;
+  // Empty-library entry has not run the library's appearance initialization.
+  int previewError=setLibraryBackground((LibraryBackground)state.saved.background);
+  if(setUIFont((UIFont)state.saved.font))previewError=1;
+  if(setAmbientOrbsAppearance((AmbientOrbsAppearance)state.saved.orbsAppearance))previewError=1;
+  setAmbientOrbsTheme((AmbientOrbsTheme)state.saved.orbsTheme,uiNowMs());
+  setAmbientOrbsShapes(state.saved.orbShapes,uiNowMs());
+  appearancePreview(&state,&state.saved);
+  state.speed=state.savedSpeed=lunaSpaceSpeed();state.depth=state.savedDepth=lunaSpaceDepth();
+  if(state.loadError)state.message="Could not read appearance settings";
+  else if(previewError)state.message="Could not preview appearance";
+  LunaCubeWorkspace workspace={&state,appearanceWorkspaceDraw,appearanceWorkspaceInput,
+    appearanceWorkspaceSelection};
+  uiCubeWorkspaceLoop(&workspace);appearanceReleaseButtons();return 0;
+}
+
+typedef struct {
+  Target *target;int logo,core;const char *error;
+  int selected;LunaCubePageFocus focus;
+} DefaultsEditor;
+static const char *defaultsLabel(void *context,int row) {(void)context;return row?"Game core":"PlayStation 2 logo";}
+static const char *defaultsValue(void *context,int row) {
+  DefaultsEditor *s=context;return row?(s->core?"OPL":"Neutrino"):(s->logo?"On":"Off");
+}
+static const char *defaultsDescription(void *context,int row) {
+  DefaultsEditor *s=context;
+  return s->error?s->error:row?"Default game core. Each game can override it.":"Default PS2 startup logo. Each game can override it.";
+}
+static void defaultsAdjust(void *context,int row,int direction) {
+  DefaultsEditor *s=context;(void)direction;
+  int result=row?saveGameCoreOpl(s->target,!s->core):savePS2LogoEnabled(s->target,!s->logo);
+  if(result)s->error="Could not save global settings";
+  else {if(row)s->core^=1;else s->logo^=1;s->error=NULL;}
+}
+static void defaultsSubmenuBegin(void *context) {
+  DefaultsEditor *state=context;
+  state->logo=loadPS2LogoEnabled(state->target);state->core=loadGameCoreOpl(state->target);
+  state->error=NULL;state->selected=0;
+  state->focus=(LunaCubePageFocus){.selected=-1,.glideMs=150};
+}
+static void defaultsSubmenuDraw(void *context,float opacity) {
+  DefaultsEditor *state=context;
+  LunaCubePage page={"Game Defaults",2,defaultsLabel,defaultsValue,defaultsDescription,defaultsAdjust,state,NULL};
+  uiCubeSubmenuPageDraw(&page,state->selected,&state->focus,opacity);
+}
+static int defaultsSubmenuInput(void *context,int input) {
+  DefaultsEditor *state=context;
+  if(input&(PAD_CIRCLE|PAD_TRIANGLE|PAD_START))return LUNA_CUBE_SUBMENU_BACK;
+  if(input&(PAD_UP|PAD_L1|PAD_DOWN|PAD_R1))state->selected^=1;
+  else if(input&(PAD_LEFT|PAD_RIGHT|PAD_CROSS))
+    defaultsAdjust(state,state->selected,input&PAD_LEFT?-1:1);
+  return LUNA_CUBE_SUBMENU_STAY;
+}
+LunaCubeSubmenu uiGameDefaultsSubmenu(Target *target) {
+  static DefaultsEditor state;
+  state.target=target;
+  return (LunaCubeSubmenu){.context=&state,.begin=defaultsSubmenuBegin,
+      .draw=defaultsSubmenuDraw,.input=defaultsSubmenuInput};
+}

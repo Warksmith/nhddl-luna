@@ -100,6 +100,10 @@ int drawTextWindow(int x1, int y1, int x2, int y2, int z, uint64_t color, uint8_
 void drawTextLineScaled(int x, int y, int right, int z, float scale,
                         uint64_t color, const char *text);
 
+// Menu text: uniform scale, pixel-aligned glyphs and matching atlas padding.
+void drawTextLineScaledCrisp(int x, int y, int right, int z, float scale,
+                           uint64_t color, const char *text);
+
 // Draws a single line shifted left within a clipped horizontal window.
 int drawTextMarquee(int x1, int y, int x2, int z, uint64_t color, const char *text, int scrollX);
 
@@ -129,6 +133,10 @@ void drawPromptBar(int left, int top, int right, int bottom, int z,
 // Quiet selection plate with the Options menu's leading accent.
 void drawMenuRowSelector(int left, int top, int right);
 
-// Draws the embedded Classic scrollbar PNG at a chosen height.
+// Proportional glass rail for list viewports; hidden when all rows fit.
+void drawListScrollbar(int x, int top, int bottom, int total, int first,
+                       int visible, int z);
+
+#include "ui/camera_draw.h"
 
 #endif

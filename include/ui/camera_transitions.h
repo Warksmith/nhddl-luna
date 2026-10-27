@@ -7,6 +7,8 @@ void lunaCameraSceneBegin(int open, uint32_t nowMs);
 void lunaCameraSceneBeforeBackground(void);
 void lunaCameraSceneAfterBackground(void);
 void lunaCameraSceneEnd(void);
+void lunaCameraMenuReturnStart(uint32_t nowMs);
+void lunaCameraMenuReturnCancel(void);
 void lunaCameraClassicBounds(float rect[4]);
 void lunaCameraViewStart(GSTEXTURE *cover, int target, const float rect[4]);
 void lunaCameraViewCancel(void);

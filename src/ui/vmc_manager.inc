@@ -57,8 +57,10 @@ static int vmcStorageDirectory(int platform,const char *root,char path[256]) {
   } else snprintf(path,256,"%s%sVMC",root,root[strlen(root)-1]=='/'?"":"/");
   return vmcEnsureDirectory(path);
 }
-static int vmcChooseRoot(int platform,char root[256]) {
-  BrowserRoot *roots=calloc(BROWSER_MAX_ROOTS,sizeof(*roots));if(!roots)return 0;
+static int vmcCollectRoots(int platform,BrowserRoot *roots) {
+#ifndef LUNA_ENABLE_PSXCORE
+  (void)platform;
+#endif
   int count=0;
   for(int i=0;i<MAX_DEVICES;++i) {
     const char *path=NULL;
@@ -70,6 +72,12 @@ static int vmcChooseRoot(int platform,char root[256]) {
       path=storageVMCRoot(&deviceModeMap[i]);
     if(path)count=addRoot(roots,count,path,path);
   }
+  return count;
+}
+#ifdef LUNA_ENABLE_PSXCORE
+static int vmcChooseRoot(int platform,char root[256]) {
+  BrowserRoot *roots=calloc(BROWSER_MAX_ROOTS,sizeof(*roots));if(!roots)return 0;
+  int count=vmcCollectRoots(platform,roots);
   int selected=0,result=0;BrowserSelector selector={.selected=-1};
   for(;;) {
     drawBrowserFrameSelected(lunaText("Virtual Memory Cards"),lunaText(platform==LUNA_VMC_PS1?"PlayStation":"PlayStation 2"),
@@ -82,6 +90,7 @@ static int vmcChooseRoot(int platform,char root[256]) {
   }
   free(roots);return result;
 }
+#endif
 static int vmcCreateNamed(int platform,const char *directory,char path[256]) {
   char name[64];snprintf(name,sizeof(name),"%s",platform==LUNA_VMC_PS1?"New PS1 Card.vmc":"New PS2 Card.bin");
   if(!editFileName(lunaText("Card name"),name,sizeof(name),sizeof(name)-1))return 0;
@@ -271,18 +280,62 @@ static int vmcBrowse(int platform,const char *root,VmcAssignCard assign,void *co
   }
   clearEntries(entries,count);free(entries);return changed;
 }
-static void uiVMCManagerLoop(void) {
-  char root[256];while(vmcChooseRoot(LUNA_VMC_PS2,root))vmcBrowse(LUNA_VMC_PS2,root,NULL,NULL);
-}
+typedef struct {
+  BrowserRoot *roots;
+  int selected,count;
+  LunaCubePageFocus focus;
+} VmcEditor;
+static void vmcSubmenuBegin(void *context) {
+  VmcEditor *editor=context;
+  editor->selected=0;
+  editor->focus=(LunaCubePageFocus){.selected=-1,.glideMs=110};
 #ifdef LUNA_ENABLE_PSXCORE
-static void uiVMCPlatformLoop(void) {
-  static const char *const platforms[]={"PlayStation","PlayStation 2"};
-  for(;;) {
-    int choice=ps1Action("Virtual Memory Cards","","Choose a console.",platforms,2,0);if(choice<0)return;
-    char root[256];while(vmcChooseRoot(choice?LUNA_VMC_PS2:LUNA_VMC_PS1,root))vmcBrowse(choice?LUNA_VMC_PS2:LUNA_VMC_PS1,root,NULL,NULL);
-  }
-}
+  editor->count=2;
+#else
+  editor->roots=calloc(BROWSER_MAX_ROOTS,sizeof(*editor->roots));
+  editor->count=editor->roots?vmcCollectRoots(LUNA_VMC_PS2,editor->roots):0;
 #endif
+}
+static void vmcSubmenuEnd(void *context) {
+  VmcEditor *editor=context;
+  free(editor->roots);editor->roots=NULL;editor->count=0;
+}
+static const char *vmcSubmenuLabel(void *context,int row) {
+  VmcEditor *editor=context;
+#ifdef LUNA_ENABLE_PSXCORE
+  (void)editor;return row?"PlayStation 2":"PlayStation";
+#else
+  return editor->roots[row].label;
+#endif
+}
+static void vmcSubmenuDraw(void *context,float opacity) {
+  VmcEditor *editor=context;
+#ifdef LUNA_ENABLE_PSXCORE
+  const char *status="Choose a console.";
+#else
+  const char *status=editor->count?"Choose a drive.":"No supported local drives found.";
+#endif
+  LunaCubePage page={.title="Virtual Memory Cards",.count=editor->count,
+      .label=vmcSubmenuLabel,.context=editor,.status=status};
+  uiCubeSubmenuPageDraw(&page,editor->selected,&editor->focus,opacity);
+}
+static int vmcSubmenuInput(void *context,int input) {
+  VmcEditor *editor=context;
+  if(input&(PAD_CIRCLE|PAD_TRIANGLE))return LUNA_CUBE_SUBMENU_BACK;
+  if(!editor->count)return LUNA_CUBE_SUBMENU_STAY;
+  if(input&PAD_UP)editor->selected=(editor->selected+editor->count-1)%editor->count;
+  else if(input&PAD_DOWN)editor->selected=(editor->selected+1)%editor->count;
+  else if(input&PAD_CROSS) {
+#ifdef LUNA_ENABLE_PSXCORE
+    int platform=editor->selected?LUNA_VMC_PS2:LUNA_VMC_PS1;
+    char root[256];while(vmcChooseRoot(platform,root))vmcBrowse(platform,root,NULL,NULL);
+#else
+    vmcBrowse(LUNA_VMC_PS2,editor->roots[editor->selected].path,NULL,NULL);
+#endif
+    editor->focus.selected=-1;
+  }
+  return LUNA_CUBE_SUBMENU_STAY;
+}
 int uiVmcPs2Slot(Target *target,ArgumentList *arguments,LunaGameOptions *options,int slot) {
   VmcAssignment assignment={.target=target,.arguments=arguments,.options=options,.slot=slot};
   static const char *const actions[]={"Choose existing cards","Create","Manage card","Physical card"};

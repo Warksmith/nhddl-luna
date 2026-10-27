@@ -6,8 +6,6 @@
 #include "ui/game_options.h"
 #include "ui/file_manager.h"
 #include "opl_devices.h"
-#include "ui/ambient.h"
-#include "ui/space_flight.h"
 #include "ui/pad.h"
 #include "ui/view_state.h"
 #include "options.h"
@@ -28,16 +26,11 @@
 
 #define OPTIONS_OPEN_DURATION_MS 360
 #define OPTIONS_CLOSE_DURATION_MS 180
-#define OPTIONS_GLASS_FADE_DURATION_MS 180
 #define OPTIONS_SELECTOR_GLIDE_DURATION_MS 110
-#define OPTIONS_TAB_FLOW_DURATION_MS 300
 #define OPTIONS_SELECTOR_ROW_SCALE 256
 
 typedef enum {
-  OPTIONS_PER_GAME,
-  OPTIONS_GLOBAL,
-  OPTIONS_VIEWS,
-  OPTIONS_ORBS
+  OPTIONS_PER_GAME
 } OptionsPage;
 
 typedef enum {
@@ -62,48 +55,14 @@ typedef struct {
   int initialized;
 } OptionsSelector;
 
-typedef struct {
-  int initialized;
-  int toLeft;
-  int toRight;
-  float fromLeft;
-  float fromRight;
-  uint32_t startMs;
-} OptionsTabSelector;
 
 typedef struct {
   Target *target;
   char titleHeader[255];
   ArgumentList *titleArguments;
   LunaGameOptions gameOptions;
-  int *classicArtOverlap;
-  int *ambientOrbsBackgroundSetting;
-  int *glassColorSetting;
-  int *fontSetting;
-  int *ambientEnabled;
   int logoSetting;
   int coreSetting;
-  int *orbsThemeSetting;
-  int *orbsAppearanceSetting;
-  int *orbsColorSetting;
-  int *tailsColorSetting;
-  uint32_t *enabledOrbShapes;
-  uint32_t *enabledViews;
-  int pendingOverlap;
-  int pendingBackground;
-  int pendingGlassColor;
-  int pendingFont;
-  Ps1CaseStyle pendingPs1CaseStyle;
-  int pendingCollectionGameList;
-  int pendingAmbient;
-  int pendingLogo;
-  int pendingCore;
-  int pendingOrbsTheme;
-  int pendingOrbsAppearance;
-  int pendingOrbsColor;
-  int pendingTailsColor;
-  uint32_t pendingOrbShapes;
-  uint32_t pendingViews;
   int titleArgumentsChanged;
   int argumentsSaved;
   LunaCheatSettings cheats;
@@ -124,19 +83,11 @@ typedef struct {
 #endif
   OptionsPage page;
   OptionsSelector selector;
-  OptionsTabSelector tabSelector;
   GameSection gameSection;
   int selectedGameHubRow;
   int selectedGameRow;
   int videoOutOpl;
   int videoOutFirstRow;
-  int selectedGlobal;
-  int selectedView;
-  int selectedOrbsRow;
-  int orbsFirstRow;
-  int orbsShapesPage;
-  int selectedOrbShape;
-  int orbShapesFirstRow;
 } OptionsMenuState;
 
 static int uiArgumentListLoop(Target *target, ArgumentList *titleArguments,
@@ -246,10 +197,6 @@ static LunaGameRow gameSectionRow(const OptionsMenuState *state,
   return gameSectionRows[section][row];
 }
 
-#define OPTIONS_VIEW_ART_LAYOUT_ROW UI_VIEW_COUNT
-#define OPTIONS_VIEW_PS1_CASE_ROW (UI_VIEW_COUNT + 1)
-#define OPTIONS_VIEW_COLLECTION_LIST_ROW (UI_VIEW_COUNT + 2)
-#define OPTIONS_VIEW_ROW_COUNT (UI_VIEW_COUNT + 3)
 
 static int optionsHeadingY(void) {
   return headerHeight - getFontLineHeight() + getFontLineHeight() / 4;
@@ -286,98 +233,8 @@ static int optionsTransitionProgress(uint32_t elapsed, uint32_t duration) {
 }
 
 // The leading edge flows first; the trailing edge gathers behind the label.
-static void optionsTabFlowPose(const OptionsTabSelector *selector, uint32_t elapsed,
-                               float *left, float *right) {
-  const float center = (selector->toLeft + selector->toRight) * 0.5f;
-  const int movingRight = center >= (selector->fromLeft + selector->fromRight) * 0.5f;
-  const float leading = optionsTransitionProgress(elapsed, 220) / 1000.0f;
-  const uint32_t trailingElapsed = elapsed > 55 ? elapsed - 55 : 0;
-  const float trailing = optionsTransitionProgress(trailingElapsed,
-      OPTIONS_TAB_FLOW_DURATION_MS - 55) / 1000.0f;
-  const float leftProgress = movingRight ? trailing : leading;
-  const float rightProgress = movingRight ? leading : trailing;
-  *left = selector->fromLeft + (selector->toLeft - selector->fromLeft) * leftProgress;
-  *right = selector->fromRight + (selector->toRight - selector->fromRight) * rightProgress;
-}
-
-static float optionsMercuryHeight(float t, float span, float radius, float stretch) {
-  const float edgeDistance = span * (t < 0.5f ? t : 1.0f - t);
-  float cap = 1.0f;
-  if (edgeDistance < radius) {
-    const float u = 1.0f - edgeDistance / radius;
-    cap = sqrtf(1.0f - u * u);
-  }
-  const float neck = 4.0f * t * (1.0f - t);
-  return radius * cap * (1.0f - 0.6f * stretch * neck * neck);
-}
 
 // A continuous rounded silhouette keeps the liquid connected while it stretches.
-static void drawOptionsMercuryBody(float left, float right, float y, float radius,
-                                   float stretch, uint64_t center, uint64_t edge) {
-  const float span = right - left;
-  float x0 = left, h0 = 0.0f;
-  for (int i = 1; i <= 24; ++i) {
-    const float t = i / 24.0f;
-    const float x1 = left + span * t;
-    const float h1 = optionsMercuryHeight(t, span, radius, stretch);
-    gsKit_prim_triangle_gouraud(gsGlobal, x0, y, x0, y - h0, x1, y - h1,
-                                6, center, edge, edge);
-    gsKit_prim_triangle_gouraud(gsGlobal, x0, y, x1, y - h1, x1, y,
-                                6, center, edge, center);
-    gsKit_prim_triangle_gouraud(gsGlobal, x0, y, x1, y, x1, y + h1,
-                                6, center, center, edge);
-    gsKit_prim_triangle_gouraud(gsGlobal, x0, y, x1, y + h1, x0, y + h0,
-                                6, center, edge, edge);
-    x0 = x1;
-    h0 = h1;
-  }
-}
-
-static void drawOptionsTabSelector(OptionsTabSelector *selector, int left,
-                                    int right, int y, int lineHeight) {
-  const uint32_t now = uiNowMs();
-  if (!selector->initialized) {
-    selector->toLeft = left;
-    selector->toRight = right;
-    selector->fromLeft = left;
-    selector->fromRight = right;
-    selector->startMs = now;
-    selector->initialized = 1;
-  } else if (selector->toLeft != left || selector->toRight != right) {
-    float currentLeft, currentRight;
-    // Retarget the visible liquid, including when another tab is pressed mid-flow.
-    optionsTabFlowPose(selector, now - selector->startMs, &currentLeft, &currentRight);
-    selector->fromLeft = currentLeft;
-    selector->fromRight = currentRight;
-    selector->toLeft = left;
-    selector->toRight = right;
-    selector->startMs = now;
-  }
-  float glowLeft, glowRight;
-  optionsTabFlowPose(selector, now - selector->startMs, &glowLeft, &glowRight);
-  float stretch = (glowRight - glowLeft - (right - left)) / 42.0f;
-  if (stretch < 0.0f) stretch = 0.0f;
-  if (stretch > 1.0f) stretch = 1.0f;
-  const float glowY = psbbnFieldStableY(y + lineHeight / 2);
-  // A continuous breath survives tab changes without restarting the flow clock.
-  const float breath = sinf((now % 3200U) * (6.28318530718f / 3200.0f));
-  const float brightness = 1.0f + 0.12f * breath;
-  const float haloSize = 1.0f + 0.04f * breath;
-  // Broad, translucent layers illuminate the label without a solid rim.
-  // The lettering is drawn afterward; all layers share the original flow clock.
-  drawOptionsMercuryBody(glowLeft - 12.0f, glowRight + 12.0f, glowY,
-      lineHeight * 0.90f * haloSize, stretch,
-      GS_SETREG_RGBA(0xD8, 0xD8, 0xE0, (int)(0x12 * brightness)), GS_SETREG_RGBA(0xD8, 0xD8, 0xE0, 0));
-  drawOptionsMercuryBody(glowLeft - 7.0f, glowRight + 7.0f, glowY,
-      lineHeight * 0.70f * haloSize, stretch,
-      GS_SETREG_RGBA(0xE8, 0xE8, 0xF0, (int)(0x18 * brightness)), GS_SETREG_RGBA(0xE8, 0xE8, 0xF0, 0));
-  drawOptionsMercuryBody(glowLeft - 3.0f, glowRight + 3.0f, glowY,
-      lineHeight * 0.53f, stretch,
-      GS_SETREG_RGBA(0xF8, 0xF8, 0xFF, (int)(0x1C * brightness)), GS_SETREG_RGBA(0xF8, 0xF8, 0xFF, 0));
-  drawOptionsMercuryBody(glowLeft, glowRight, glowY,
-      lineHeight * 0.36f, stretch,
-      GS_SETREG_RGBA(0xFF, 0xFF, 0xFF, (int)(0x16 * brightness)), GS_SETREG_RGBA(0xFF, 0xFF, 0xFF, 0));
-}
 
 static void drawOptionsBlackout(int alpha) {
   if (alpha <= 0)
@@ -533,18 +390,6 @@ static void drawVideoOutRows(OptionsMenuState *state, int baseX, int firstY,
                      lunaText("Select one output per core. Left/right changes tabs."));
 }
 
-static int optionsGlobalRowY(int index, int firstY, int rowStep, int lineHeight) {
-  return firstY + index * rowStep +
-         (index >= 3 ? lineHeight : 0) +
-         (index >= 5 ? lineHeight : 0);
-}
-
-static int optionsViewRowY(int row, int firstY, int rowStep,
-                            int lineHeight) {
-  return firstY + row * rowStep +
-         (row >= OPTIONS_VIEW_ART_LAYOUT_ROW ? lineHeight : 0);
-}
-
 static int gameVMCEnabled(ArgumentList *arguments) {
   const char *const names[] = {"mc0", "mc1"};
   for (int slot = 0; slot < 2; slot++) {
@@ -602,57 +447,11 @@ static void drawOptionsSection(int y, const char *title, int musicNotes) {
     drawGlassDiamond(titleX + titleWidth + 14, y + 8, 6, 0, color);
 }
 
-static int optionsGlobalDirty(int pendingBackground, int pendingGlassColor,
-                              int pendingFont, int pendingAmbient, int pendingLogo,
-                              int pendingCore,
-                              int background, int glassColor, int fontSetting,
-                              int ambient, int logo, int core);
-
 static const char *gamePS2LogoValue(const OptionsMenuState *state) {
   Argument *logo = getArgument(state->titleArguments, "logo");
   if (logo == NULL || logo->isGlobal)
     return state->logoSetting ? lunaText("Inherit (On)") : lunaText("Inherit (Off)");
   return state->gameOptions.ps2Logo ? lunaText("Override (On)") : lunaText("Override (Off)");
-}
-
-static OptionsPage optionsNextPage(OptionsPage page, int direction) {
-  return (OptionsPage)((page + direction + OPTIONS_ORBS + 1) %
-                       (OPTIONS_ORBS + 1));
-}
-
-static int optionsOrbsEditable(const OptionsMenuState *state) {
-  return *state->ambientOrbsBackgroundSetting == LIBRARY_BACKGROUND_ORBS ||
-         *state->ambientOrbsBackgroundSetting == LIBRARY_BACKGROUND_SPACE_FLIGHT;
-}
-
-static int optionsOrbsColorsEditable(const OptionsMenuState *state) {
-  return state->pendingOrbsAppearance != ORBS_APPEARANCE_PS2_ORIGINAL;
-}
-
-static int optionsOrbsShapeFirstRow(const OptionsMenuState *state) {
-  return optionsOrbsColorsEditable(state) ? 4 : 2;
-}
-
-static int optionsOrbsRowCount(const OptionsMenuState *state) {
-  return optionsOrbsShapeFirstRow(state) +
-         (state->pendingOrbsTheme == ORBS_THEME_LUNA ? 1 : 0);
-}
-
-static void drawOrbsUnavailablePopup(int baseX, int menuTop, int menuBottom) {
-  const int left = baseX + 28;
-  const int right = gsGlobal->Width - baseX - 28;
-  const int middleY = (menuTop + menuBottom) / 2;
-  const int top = middleY - 58;
-  const int bottom = middleY + 58;
-  drawGlassPanel(left, top, right, bottom, 3);
-  drawTextWindow(left + 14, top + 14, right - 14, top + 36, 4,
-                 ColorSelected, ALIGN_HCENTER, lunaText("Ambient Orbs required"));
-  drawTextWindow(left + 14, top + 43, right - 14, top + 65, 4,
-                 FontMainColor, ALIGN_HCENTER,
-                 lunaText("Shown when Global background is Ambient Orbs."));
-  drawTextWindow(left + 14, top + 73, right - 14, bottom - 10, 4,
-                 HeaderTextColor, ALIGN_HCENTER,
-                 lunaText("Set Global > Background to Ambient Orbs."));
 }
 
 static void drawGameVMCRows(OptionsMenuState *state, int baseX,
@@ -721,6 +520,7 @@ static void drawGameCheatRows(OptionsMenuState *state, int baseX, int firstY, in
   if (state->selectedGameRow < state->cheatFirstRow) state->cheatFirstRow = state->selectedGameRow;
   if (state->selectedGameRow >= state->cheatFirstRow + visible)
     state->cheatFirstRow = state->selectedGameRow - visible + 1;
+  const int rowRight = gsGlobal->Width - baseX - (count > visible ? 14 : 0);
   for (int row = state->cheatFirstRow; row < count && row < state->cheatFirstRow + visible; row++) {
     const char *label, *value;
     char name[48];
@@ -735,9 +535,11 @@ static void drawGameCheatRows(OptionsMenuState *state, int baseX, int firstY, in
           lunaCheatSelected(&state->cheats, entry->id) ? "[x]" : "[ ]";
     }
     int y = firstY + (row - state->cheatFirstRow) * step;
-    drawOptionsTextRow(baseX, y, gsGlobal->Width - baseX,
+    drawOptionsTextRow(baseX, y, rowRight,
                        row == state->selectedGameRow, y, label, value);
   }
+  drawListScrollbar(gsGlobal->Width - baseX - 6, firstY, firstY + visible * step,
+                     count, state->cheatFirstRow, visible, 6);
   char detail[192];
   if (state->selectedGameRow >= 3) {
     const LunaCheatEntry *entry = &state->cheatFile.entries[state->selectedGameRow - 3];
@@ -766,243 +568,11 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
   gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
   drawOptionsSheet();
 
-  const int tabY = optionsHeadingY();
-  const int middle = gsGlobal->Width / 2;
-  static const int englishTabOffsets[] = {-175, -75, 30, 135};
-  int tabOffsets[4];
-  const char *const tabLabels[] = {"Game", "Global", "Views",
-      getLibraryBackground() == LIBRARY_BACKGROUND_SPACE_FLIGHT ? "Space" : "Orbs"};
-  // Fit translated headings by their rendered widths.
-  // Preserve the existing English layout.
-  int tabWidths[4], totalTabWidth = 3 * 24;
-  for (int tab = 0; tab < 4; tab++) {
-    tabWidths[tab] = (int)getLineWidth(lunaText(tabLabels[tab]));
-    totalTabWidth += tabWidths[tab];
-  }
-  int tabLeft = -totalTabWidth / 2;
-  for (int tab = 0; tab < 4; tab++) {
-    tabOffsets[tab] = lunaLanguage() == LUNA_LANGUAGE_ENGLISH ? englishTabOffsets[tab] : tabLeft;
-    tabLeft += tabWidths[tab] + 24;
-  }
-  drawIconWindow(middle - 230, tabY, middle - 200, tabY + lineHeight, 0,
-                 FontMainColor, ALIGN_VCENTER, ICON_L1);
-  const int selectedTabX = middle + tabOffsets[state->page];
-  const char *selectedTabLabel = lunaText(tabLabels[state->page]);
-  drawOptionsTabSelector(&state->tabSelector, selectedTabX - 6,
-      selectedTabX + (int)getLineWidth(selectedTabLabel) + 6,
-      tabY, lineHeight);
-  for (int tab = OPTIONS_PER_GAME; tab <= OPTIONS_ORBS; tab++) {
-    drawText(middle + tabOffsets[tab], tabY, 0, 0, 0,
-             HeaderTextColor,
-             lunaText(tabLabels[tab]));
-  }
-  drawIconWindow(middle + 215, tabY, middle + 245, tabY + lineHeight, 0,
-                 FontMainColor, ALIGN_VCENTER, ICON_R1);
+  drawOptionsSection(optionsHeadingY(),lunaText("Game settings"),0);
   const int menuTop = optionsMenuTop();
   const int menuBottom = gsGlobal->Height - footerHeight - lineHeight;
   const int rowStep = lineHeight + lineHeight / 2;
-  if (state->page == OPTIONS_GLOBAL) {
-    static const char *const backgroundLabels[LIBRARY_BACKGROUND_COUNT] = {
-        "Stars & cubes", "Ambient Orbs", "Red Clouds", "Midnight Cubes",
-        "System Configuration", "Neo", "Aurora", "Ronin", "Gridrunner",
-        "Torch", "Tempest", "Space Flight"};
-    const int firstY = menuTop + lineHeight + 4;
-    const int rowStep = (menuBottom - firstY - 3 * lineHeight) / 6;
-    int selectorY = optionsSelectorY(&state->selector, state->page, state->selectedGlobal,
-                                     optionsGlobalRowY(state->selectedGlobal, firstY, rowStep, lineHeight));
-    drawOptionsSection(menuTop, lunaText("Appearance"), 0);
-    drawOptionsTextRow(baseX, firstY, gsGlobal->Width - baseX,
-                       state->selectedGlobal == 0, selectorY, lunaText("Background"),
-                       lunaText(backgroundLabels[state->pendingBackground]));
-    static const char *const glassColorLabels[GLASS_COLOR_COUNT] = {
-        "Original", "Luminous", "Cosmic"};
-    drawOptionsTextRow(baseX, firstY + rowStep, gsGlobal->Width - baseX,
-                       state->selectedGlobal == 1, selectorY, lunaText("Glass color"),
-                       lunaText(glassColorLabels[state->pendingGlassColor]));
-    drawOptionsTextRow(baseX, firstY + 2 * rowStep, gsGlobal->Width - baseX,
-                       state->selectedGlobal == 2, selectorY, lunaText("Font"),
-                       state->pendingFont == UI_FONT_PSBBN ? "PSBBN" : "DejaVu");
-    drawOptionsSection(firstY + 3 * rowStep, lunaText("Game defaults"), 0);
-    drawOptionsTextRow(baseX, optionsGlobalRowY(3, firstY, rowStep, lineHeight),
-                       gsGlobal->Width - baseX, state->selectedGlobal == 3, selectorY,
-                       lunaText("PlayStation 2 logo"), state->pendingLogo ? lunaText("On") : lunaText("Off"));
-    drawOptionsTextRow(baseX, optionsGlobalRowY(4, firstY, rowStep, lineHeight),
-                       gsGlobal->Width - baseX, state->selectedGlobal == 4, selectorY,
-                       lunaText("Game core"), state->pendingCore ? "OPL" : "Neutrino");
-    drawOptionsSection(firstY + 5 * rowStep + lineHeight,
-                       lunaText("Audio"), 1);
-    drawOptionsTextRow(baseX, optionsGlobalRowY(5, firstY, rowStep, lineHeight),
-                       gsGlobal->Width - baseX, state->selectedGlobal == 5, selectorY,
-                       lunaText("Ambient sound"), state->pendingAmbient ? lunaText("On") : lunaText("Off"));
-    static const char *const descriptions[] = {
-        "Choose a background; tune Space Flight in the Space tab.",
-        "Change the tint of the glass interface.",
-        "Use LUNA's font or the PSBBN keyboard lettering.",
-        "Default PS2 startup logo setting for every game.",
-        "Default game core for every supported device.",
-        "Play ambient music while browsing."};
-    if (showDescription)
-      drawTextWindow(baseX + 18, menuBottom,
-                     gsGlobal->Width - baseX, gsGlobal->Height - footerHeight, 0,
-                     HeaderTextColor, ALIGN_LEFT, lunaText(descriptions[state->selectedGlobal]));
-  } else if (state->page == OPTIONS_VIEWS) {
-    const int firstY = menuTop + lineHeight + 4;
-    // Keep the list compact while leaving room for appearance and its description.
-    const int availableStep = (menuBottom - firstY - 3 * lineHeight) /
-                              (OPTIONS_VIEW_ROW_COUNT - 1);
-    const int compactStep = lineHeight + lineHeight / 2;
-    const int rowStep = availableStep < compactStep ? availableStep : compactStep;
-    int selectorY = optionsSelectorY(&state->selector, state->page, state->selectedView,
-                                     optionsViewRowY(state->selectedView,
-                                                     firstY, rowStep, lineHeight));
-    drawOptionsSection(menuTop, lunaText("Enabled views"), 0);
-    for (int row = 0; row < UI_VIEW_COUNT; row++) {
-      const UILibraryView view = lunaViewCycleOrder[row];
-      const char *label = lunaNavViewLabel(view);
-      drawOptionsTextRow(baseX, firstY + row * rowStep,
-                         gsGlobal->Width - baseX, state->selectedView == row,
-                         selectorY, label,
-                         state->pendingViews & (1U << view) ? lunaText("On") : lunaText("Off"));
-    }
-    drawOptionsSection(firstY + OPTIONS_VIEW_ART_LAYOUT_ROW * rowStep,
-                       lunaText("View appearance"), 0);
-    drawOptionsTextRow(baseX + 18,
-                       optionsViewRowY(OPTIONS_VIEW_ART_LAYOUT_ROW,
-                                       firstY, rowStep, lineHeight),
-                       gsGlobal->Width - baseX,
-                       state->selectedView == OPTIONS_VIEW_ART_LAYOUT_ROW, selectorY,
-                       lunaText("List art layout"),
-                       state->pendingOverlap ? lunaText("Overlap") : lunaText("Separate"));
-    drawOptionsTextRow(baseX + 18,
-                       optionsViewRowY(OPTIONS_VIEW_PS1_CASE_ROW,
-                                       firstY, rowStep, lineHeight),
-                       gsGlobal->Width - baseX,
-                       state->selectedView == OPTIONS_VIEW_PS1_CASE_ROW, selectorY,
-                       lunaText("PS1 case style"),
-                       lunaText(state->pendingPs1CaseStyle == PS1_CASE_SQUARE ?
-                                "Jewel case" : "Tall"));
-    drawOptionsTextRow(baseX + 18,
-                       optionsViewRowY(OPTIONS_VIEW_COLLECTION_LIST_ROW,
-                                       firstY, rowStep, lineHeight),
-                       gsGlobal->Width - baseX,
-                       state->selectedView == OPTIONS_VIEW_COLLECTION_LIST_ROW, selectorY,
-                       lunaText("Collections game list"),
-                       lunaText(state->pendingCollectionGameList ? "On" : "Off"));
-    if (showDescription && state->selectedView >= OPTIONS_VIEW_ART_LAYOUT_ROW)
-      drawTextWindow(baseX + 18, menuBottom,
-                     gsGlobal->Width - baseX, gsGlobal->Height - footerHeight, 0,
-                     HeaderTextColor, ALIGN_LEFT,
-                     lunaText(state->selectedView == OPTIONS_VIEW_COLLECTION_LIST_ROW ?
-                         "Show a game list beside the Collections cover. Off by default." :
-                         state->selectedView == OPTIONS_VIEW_PS1_CASE_ROW ?
-                         "Choose PS1 covers in List and 3D. PS2 stays tall." :
-                         "Choose how cover art sits in List view."));
-    else if (showDescription) {
-      const ButtonPrompt cycle[] = {
-          {ICON_CIRCLE, lunaText("Cycle views; keep at least one on")}};
-      drawPromptBar(baseX + 18, menuBottom,
-                    gsGlobal->Width - baseX, gsGlobal->Height - footerHeight, 0,
-                    HeaderTextColor, (PromptBar){NULL, cycle, 1});
-    }
-  } else if (state->page == OPTIONS_ORBS) {
-    const int space = getLibraryBackground() == LIBRARY_BACKGROUND_SPACE_FLIGHT;
-    drawOptionsSection(menuTop, space ? "Space Flight" : lunaText(state->orbsShapesPage ? "Shapes" : "Orbs"), 0);
-    if (space) {
-      static const char *const speedLabels[] = {"Paused", "0.15x", "0.30x", "0.60x", "1.00x", "1.70x", "2.80x", "4.20x", "6.00x"};
-      static const char *const depthLabels[] = {"Shallow", "Near", "Balanced", "Deep", "Very deep"};
-      state->selectedOrbsRow &= 1;
-      const int firstY = menuTop + lineHeight * 2;
-      const int selectedY = firstY + state->selectedOrbsRow * rowStep * 2;
-      const int selectorY = optionsSelectorY(&state->selector, state->page,
-          state->selectedOrbsRow, selectedY);
-      drawOptionsTextRow(baseX, firstY, gsGlobal->Width - baseX,
-          state->selectedOrbsRow == 0, selectorY, "Speed", speedLabels[lunaSpaceSpeed()]);
-      drawOptionsTextRow(baseX, firstY + rowStep * 2, gsGlobal->Width - baseX,
-          state->selectedOrbsRow == 1, selectorY, "Depth", depthLabels[lunaSpaceDepth()]);
-      if (showDescription)
-        drawTextWindow(baseX + 18, menuBottom, gsGlobal->Width - baseX,
-            gsGlobal->Height - footerHeight, 0, HeaderTextColor, ALIGN_LEFT,
-            "Left/right adjusts the live wallpaper. These trial values last until restart.");
-    } else if (!optionsOrbsEditable(state)) {
-      drawOrbsUnavailablePopup(baseX, menuTop, menuBottom);
-    } else {
-      static const char *const colorLabels[ORBS_COLOR_COUNT] = {
-          "Original", "Cyan", "Violet", "Rose", "Green", "Gold", "White"};
-      static const char *const shapeLabels[ORB_SHAPE_PLAYTIME] = {
-          "Diamond", "Cube", "Octahedron", "Sphere", "LUNA", "Skull", "Atom",
-          "Iron Cross"};
-      int enabledShapeCount = 0;
-      for (int shape = 0; shape < ORB_SHAPE_PLAYTIME; shape++)
-        if (state->pendingOrbShapes & (1U << shape))
-          enabledShapeCount++;
-      char shapeCount[24];
-      snprintf(shapeCount, sizeof(shapeCount), "%d/%d", enabledShapeCount,
-               ORB_SHAPE_PLAYTIME);
-      const int firstY = menuTop + lineHeight + 4;
-      const int shapeFirst = optionsOrbsShapeFirstRow(state);
-      const int rowCount = state->orbsShapesPage ? ORB_SHAPE_PLAYTIME :
-                                                 optionsOrbsRowCount(state);
-      int *selected = state->orbsShapesPage ? &state->selectedOrbShape :
-                                            &state->selectedOrbsRow;
-      int *first = state->orbsShapesPage ? &state->orbShapesFirstRow :
-                                         &state->orbsFirstRow;
-      if (*selected >= rowCount)
-        *selected = state->orbsShapesPage ? 0 : 1;
-      int visible = (menuBottom - 2 * lineHeight - firstY) / rowStep;
-      if (visible < 1)
-        visible = 1;
-      if (*selected < *first)
-        *first = *selected;
-      if (*selected >= *first + visible)
-        *first = *selected - visible + 1;
-      if (*first > rowCount - visible)
-        *first = rowCount > visible ? rowCount - visible : 0;
-      const int selectorY = optionsSelectorY(&state->selector, state->page,
-                                             *selected,
-                                             firstY + (*selected - *first) * rowStep);
-      for (int row = *first; row < rowCount && row < *first + visible; row++) {
-        const char *label, *value;
-        if (state->orbsShapesPage) {
-          label = shapeLabels[row];
-          value = state->pendingOrbShapes & (1U << row) ? "On" : "Off";
-        } else if (row == 0) {
-          label = "Behavior";
-          value = state->pendingOrbsTheme == ORBS_THEME_PS2_ORIGINAL ? "PS2 original" : "LUNA";
-        } else if (row == 1) {
-          label = "Appearance";
-          value = state->pendingOrbsAppearance == ORBS_APPEARANCE_PS2_ORIGINAL ? "PS2 original" : "LUNA";
-        } else if (row < shapeFirst) {
-          label = row == 2 ? "Orb color" : "Tail color";
-          value = colorLabels[row == 2 ? state->pendingOrbsColor : state->pendingTailsColor];
-        } else {
-          label = "Shapes";
-          value = shapeCount;
-        }
-        drawOptionsTextRow(baseX, firstY + (row - *first) * rowStep,
-                           gsGlobal->Width - baseX, *selected == row,
-                           selectorY, lunaText(label), lunaText(value));
-      }
-      if (showDescription)
-        drawTextWindow(baseX + 18, menuBottom,
-                     gsGlobal->Width - baseX, gsGlobal->Height - footerHeight, 0,
-                     HeaderTextColor, ALIGN_LEFT,
-                     state->orbsShapesPage ?
-                         lunaText("Choose shapes for LUNA. All off keeps playtime.") :
-                     state->selectedOrbsRow == shapeFirst ?
-                         lunaText("Open Shapes to choose which formations appear.") :
-                     state->selectedOrbsRow >= 2 && !optionsOrbsColorsEditable(state) ?
-                         lunaText("PS2 original appearance uses its original colors.") :
-                     state->selectedOrbsRow >= 2 ?
-                         lunaText("Color choices affect only the shared orb background.") :
-                     state->selectedOrbsRow == 0 ?
-                         (state->pendingOrbsTheme == ORBS_THEME_PS2_ORIGINAL ?
-                          lunaText("Seven clock-driven lights with long trails.") :
-                          lunaText("Animated LUNA formations and title reactions.")) :
-                         (state->pendingOrbsAppearance == ORBS_APPEARANCE_PS2_ORIGINAL ?
-                          lunaText("Original halo and core masks from the PS2 ROM.") :
-                          lunaText("LUNA's soft glass lights and bright cores.")));
-    }
-  } else if (state->target->platform == TARGET_PS1) {
+  if (state->target->platform == TARGET_PS1) {
     if (state->gameSection == GAME_HUB) {
       drawTextWindow(baseX, menuTop, gsGlobal->Width - baseX, 0, 0,
                      HeaderTextColor, ALIGN_HCENTER, state->titleHeader);
@@ -1218,31 +788,17 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
                   state->gameSection == GAME_MEMORY_CARDS && !state->ps1CardsReady ? (PromptBar){NULL,retryPrompts,3} :
 #endif
                   (PromptBar){NULL,prompts,promptCount});
-  } else drawOptionsFooter(state->page == OPTIONS_PER_GAME, 0,
-                    state->page == OPTIONS_ORBS && !optionsOrbsEditable(state),
-                    state->page == OPTIONS_ORBS && getLibraryBackground() == LIBRARY_BACKGROUND_SPACE_FLIGHT ? "Adjust" :
-                    state->page == OPTIONS_ORBS && state->orbsShapesPage ? lunaText("Toggle") :
-                    state->page == OPTIONS_ORBS &&
-                    state->pendingOrbsTheme == ORBS_THEME_LUNA &&
-                    state->selectedOrbsRow == optionsOrbsShapeFirstRow(state) ? lunaText("Open") :
-                    state->page == OPTIONS_PER_GAME && state->gameSection == GAME_HUB ?
-                        (state->selectedGameHubRow == GAME_MEMORY_CARDS ?
-                            (gameVMCEnabled(state->titleArguments) ? lunaText("Manage") : lunaText("Enable")) :
-                         state->selectedGameHubRow == GAME_CORE ? lunaText("Change") :
-                            lunaText("Open")) :
-                    state->page == OPTIONS_PER_GAME &&
-                    state->gameSection == GAME_VIDEO_OUT ? lunaText("Select") :
-                    state->page == OPTIONS_PER_GAME &&
-                    state->gameSection == GAME_VIDEO && state->selectedGameRow == 0 ?
-                        lunaText("Open") :
-                    state->page == OPTIONS_PER_GAME &&
-                    state->gameSection == GAME_MEMORY_CARDS ?
-                        (state->selectedGameRow == 2 ? lunaText("Create") :
-                         state->selectedGameRow == 3 ? lunaText("Disable") : lunaText("Assign")) : NULL,
-                    (state->page == OPTIONS_PER_GAME &&
-                     state->gameSection != GAME_HUB) ||
-                    (state->page == OPTIONS_ORBS &&
-                     (!optionsOrbsEditable(state) || state->orbsShapesPage)));
+  } else drawOptionsFooter(1,0,0,
+      state->gameSection == GAME_HUB ?
+        (state->selectedGameHubRow == GAME_MEMORY_CARDS ?
+          (gameVMCEnabled(state->titleArguments) ? lunaText("Manage") : lunaText("Enable")) :
+         state->selectedGameHubRow == GAME_CORE ? lunaText("Change") : lunaText("Open")) :
+      state->gameSection == GAME_VIDEO_OUT ? lunaText("Select") :
+      state->gameSection == GAME_VIDEO && state->selectedGameRow == 0 ? lunaText("Open") :
+      state->gameSection == GAME_MEMORY_CARDS ?
+        (state->selectedGameRow == 2 ? lunaText("Create") :
+         state->selectedGameRow == 3 ? lunaText("Disable") : lunaText("Assign")) : NULL,
+      state->gameSection != GAME_HUB);
   if (showDirty && state->saveError) {
     // Give save failures the description area without overlapping its old text.
     gsKit_prim_sprite(gsGlobal, baseX, gsGlobal->Height - footerHeight - getFontLineHeight(),
@@ -1252,10 +808,7 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
                    gsGlobal->Width - baseX, gsGlobal->Height - footerHeight, 0,
                    ErrorTextColor, ALIGN_HCENTER,
                    state->saveErrorLabel ? state->saveErrorLabel :
-                   state->page == OPTIONS_GLOBAL ? lunaText("Could not save global settings") :
-                   state->page == OPTIONS_VIEWS ? lunaText("Could not save views") :
-                   state->page == OPTIONS_ORBS ? lunaText("Could not save orb settings") :
-                                           lunaText("Could not save game settings"));
+                   lunaText("Could not save game settings"));
   }
   if (transitionMode != 0)
     drawOptionsTransition(transitionProgress, transitionMode == 2);
@@ -1263,314 +816,8 @@ static void drawTitleOptionsFrame(OptionsMenuState *state,
   presentOptionsFrame();
 }
 
-static void changeOptionsGlassColor(OptionsMenuState *state, int color) {
-  uint32_t transitionStart = uiNowMs();
-  int progress;
-  do {
-    progress = optionsTransitionProgress(
-        uiNowMs() - transitionStart, OPTIONS_GLASS_FADE_DURATION_MS);
-    drawTitleOptionsFrame(state, progress, 2);
-    pollInput();
-  } while (progress < 1000);
-
-  state->pendingGlassColor = color;
-  setGlassColorPreset((GlassColorPreset)color);
-
-  transitionStart = uiNowMs();
-  do {
-    progress = optionsTransitionProgress(
-        uiNowMs() - transitionStart, OPTIONS_GLASS_FADE_DURATION_MS);
-    drawTitleOptionsFrame(state, progress, 1);
-    pollInput();
-  } while (progress < 1000);
-}
-
-static int optionsGlobalDirty(int pendingBackground, int pendingGlassColor,
-                              int pendingFont, int pendingAmbient, int pendingLogo,
-                              int pendingCore,
-                              int background, int glassColor, int fontSetting,
-                              int ambient, int logo, int core) {
-  return pendingBackground != background || pendingGlassColor != glassColor ||
-         pendingFont != fontSetting || pendingAmbient != ambient ||
-         pendingLogo != logo || pendingCore != core;
-}
-
 static int uiVMCPickerLoop(Target *target,ArgumentList *arguments,LunaGameOptions *options,int slot) {
   return uiVmcPs2Slot(target,arguments,options,slot);
-}
-
-static int handleOrbsInput(OptionsMenuState *state, int input) {
-  if (getLibraryBackground() == LIBRARY_BACKGROUND_SPACE_FLIGHT) {
-    state->selectedOrbsRow &= 1;
-    if (input & PAD_TRIANGLE) return 1;
-    if (input & (PAD_UP | PAD_DOWN)) state->selectedOrbsRow ^= 1;
-    else if (input & (PAD_LEFT | PAD_RIGHT | PAD_CROSS | PAD_CIRCLE)) {
-      const int step = (input & PAD_LEFT) ? -1 : 1;
-      if (state->selectedOrbsRow == 0) lunaSpaceSetSpeed(lunaSpaceSpeed() + step);
-      else lunaSpaceSetDepth(lunaSpaceDepth() + step);
-    }
-    return 0;
-  }
-
-  if (!optionsOrbsEditable(state)) {
-    if (input & PAD_TRIANGLE) {
-      state->page = OPTIONS_VIEWS;
-      state->selector.initialized = 0;
-      state->saveError = 0;
-    }
-    return 0;
-  }
-  const int rowCount = state->orbsShapesPage ? ORB_SHAPE_PLAYTIME :
-                                             optionsOrbsRowCount(state);
-  int *selected = state->orbsShapesPage ? &state->selectedOrbShape :
-                                        &state->selectedOrbsRow;
-  if (*selected >= rowCount)
-    *selected = state->orbsShapesPage ? 0 : 1;
-  if (input & PAD_UP) {
-    *selected = (*selected + rowCount - 1) % rowCount;
-  } else if (input & PAD_DOWN) {
-    *selected = (*selected + 1) % rowCount;
-  } else if (input & (PAD_CROSS | PAD_CIRCLE | PAD_LEFT | PAD_RIGHT)) {
-    const int direction = input & PAD_LEFT ? -1 : 1;
-    if (state->orbsShapesPage)
-      state->pendingOrbShapes ^= 1U << state->selectedOrbShape;
-    else if (state->selectedOrbsRow == 0)
-      state->pendingOrbsTheme = state->pendingOrbsTheme == ORBS_THEME_LUNA ?
-                         ORBS_THEME_PS2_ORIGINAL : ORBS_THEME_LUNA;
-    else if (state->selectedOrbsRow == 1) {
-      state->pendingOrbsAppearance = state->pendingOrbsAppearance == ORBS_APPEARANCE_LUNA ?
-                              ORBS_APPEARANCE_PS2_ORIGINAL : ORBS_APPEARANCE_LUNA;
-      if (!optionsOrbsColorsEditable(state)) {
-        state->pendingOrbsColor = *state->orbsColorSetting;
-        state->pendingTailsColor = *state->tailsColorSetting;
-      }
-    } else if (state->selectedOrbsRow == 2 && optionsOrbsColorsEditable(state))
-      state->pendingOrbsColor = (state->pendingOrbsColor + direction + ORBS_COLOR_COUNT) %
-                               ORBS_COLOR_COUNT;
-    else if (state->selectedOrbsRow == 3 && optionsOrbsColorsEditable(state))
-      state->pendingTailsColor = (state->pendingTailsColor + direction + ORBS_COLOR_COUNT) %
-                          ORBS_COLOR_COUNT;
-    else if (state->pendingOrbsTheme == ORBS_THEME_LUNA &&
-             state->selectedOrbsRow == optionsOrbsShapeFirstRow(state) &&
-             (input & (PAD_CROSS | PAD_CIRCLE | PAD_RIGHT))) {
-      state->orbsShapesPage = 1;
-      state->selector.initialized = 0;
-      state->saveError = 0;
-    }
-    if (state->pendingOrbsTheme == *state->orbsThemeSetting &&
-        state->pendingOrbsAppearance == *state->orbsAppearanceSetting &&
-        state->pendingOrbsColor == *state->orbsColorSetting &&
-        state->pendingTailsColor == *state->tailsColorSetting &&
-        state->pendingOrbShapes == *state->enabledOrbShapes) return 0;
-    LunaAppearance candidate;
-    state->saveErrorLabel = lunaText("Could not save appearance settings");
-    state->saveError = loadAppearance(state->target, &candidate);
-    if (!state->saveError) {
-      candidate.orbsTheme = state->pendingOrbsTheme;
-      candidate.orbsAppearance = state->pendingOrbsAppearance;
-      candidate.orbShapes = state->pendingOrbShapes;
-      if (optionsOrbsColorsEditable(state)) {
-        candidate.orbsColor = state->pendingOrbsColor;
-        candidate.tailsColor = state->pendingTailsColor;
-      }
-      int appearanceChanged = candidate.orbsAppearance != (uint32_t)*state->orbsAppearanceSetting;
-      if (appearanceChanged)
-        state->saveError = setAmbientOrbsAppearance((AmbientOrbsAppearance)candidate.orbsAppearance);
-      if (!state->saveError)
-        state->saveError = saveAppearance(state->target, &candidate);
-      if (state->saveError) {
-        if (appearanceChanged)
-          setAmbientOrbsAppearance((AmbientOrbsAppearance)*state->orbsAppearanceSetting);
-      } else {
-        if (candidate.orbsTheme != (uint32_t)*state->orbsThemeSetting)
-          setAmbientOrbsTheme((AmbientOrbsTheme)candidate.orbsTheme, uiNowMs());
-        if (candidate.orbShapes != *state->enabledOrbShapes)
-          setAmbientOrbsShapes(candidate.orbShapes, uiNowMs());
-        *state->orbsThemeSetting = candidate.orbsTheme;
-        *state->orbsAppearanceSetting = candidate.orbsAppearance;
-        *state->enabledOrbShapes = candidate.orbShapes;
-        *state->orbsColorSetting = candidate.orbsColor;
-        *state->tailsColorSetting = candidate.tailsColor;
-        setAmbientOrbsColor(ORBS_COLOR_PART_ORBS, (AmbientOrbsColor)candidate.orbsColor);
-        setAmbientOrbsColor(ORBS_COLOR_PART_TAILS, (AmbientOrbsColor)candidate.tailsColor);
-      }
-    }
-    if (state->saveError) {
-      state->pendingOrbsTheme = *state->orbsThemeSetting;
-      state->pendingOrbsAppearance = *state->orbsAppearanceSetting;
-      state->pendingOrbsColor = *state->orbsColorSetting;
-      state->pendingTailsColor = *state->tailsColorSetting;
-      state->pendingOrbShapes = *state->enabledOrbShapes;
-    }
-  } else if (input & PAD_TRIANGLE) {
-    if (state->orbsShapesPage) {
-      state->orbsShapesPage = 0;
-      state->selector.initialized = 0;
-      state->saveError = 0;
-      return 0;
-    }
-    return 1;
-  }
-  return 0;
-}
-
-static int handleViewsInput(OptionsMenuState *state, int input) {
-  if (input & PAD_UP) {
-    state->selectedView = (state->selectedView + OPTIONS_VIEW_ROW_COUNT - 1) %
-                   OPTIONS_VIEW_ROW_COUNT;
-  } else if (input & PAD_DOWN) {
-    state->selectedView = (state->selectedView + 1) % OPTIONS_VIEW_ROW_COUNT;
-  } else if (input & (PAD_CROSS | PAD_CIRCLE | PAD_LEFT | PAD_RIGHT)) {
-    if (state->selectedView == OPTIONS_VIEW_ART_LAYOUT_ROW) {
-      state->pendingOverlap = !state->pendingOverlap;
-    } else if (state->selectedView == OPTIONS_VIEW_PS1_CASE_ROW) {
-      state->pendingPs1CaseStyle = state->pendingPs1CaseStyle == PS1_CASE_TALL ?
-                                 PS1_CASE_SQUARE : PS1_CASE_TALL;
-    } else if (state->selectedView == OPTIONS_VIEW_COLLECTION_LIST_ROW) {
-      state->pendingCollectionGameList = !state->pendingCollectionGameList;
-    } else {
-      uint32_t bit = 1U << lunaViewCycleOrder[state->selectedView];
-      if (state->pendingViews != bit)
-        state->pendingViews ^= bit;
-    }
-    if (state->pendingOverlap == *state->classicArtOverlap &&
-        state->pendingPs1CaseStyle == getPs1CaseStyle() &&
-        state->pendingCollectionGameList == getCollectionGameList() &&
-        state->pendingViews == *state->enabledViews) return 0;
-    LunaAppearance candidate;
-    state->saveErrorLabel = lunaText("Could not save appearance settings");
-    state->saveError = loadAppearance(state->target, &candidate);
-    if (!state->saveError) {
-      candidate.classicOverlap = state->pendingOverlap;
-      candidate.ps1CaseStyle = state->pendingPs1CaseStyle;
-      candidate.collectionGameList = state->pendingCollectionGameList;
-      candidate.enabledViews = state->pendingViews;
-      state->saveError = saveAppearance(state->target, &candidate);
-      if (!state->saveError) {
-        *state->classicArtOverlap = candidate.classicOverlap;
-        *state->enabledViews = candidate.enabledViews;
-        setClassicArtOverlap(candidate.classicOverlap);
-        setPs1CaseStyle((Ps1CaseStyle)candidate.ps1CaseStyle);
-        setCollectionGameList(candidate.collectionGameList);
-      }
-    }
-    if (state->saveError) {
-      state->pendingOverlap = *state->classicArtOverlap;
-      state->pendingPs1CaseStyle = getPs1CaseStyle();
-      state->pendingCollectionGameList = getCollectionGameList();
-      state->pendingViews = *state->enabledViews;
-    }
-  } else if (input & PAD_TRIANGLE) {
-    return 1;
-  }
-  return 0;
-}
-
-static int handleSystemInput(OptionsMenuState *state, int input) {
-  if (input & PAD_UP) {
-    state->selectedGlobal = (state->selectedGlobal + 5) % 6;
-  } else if (input & PAD_DOWN) {
-    state->selectedGlobal = (state->selectedGlobal + 1) % 6;
-  } else if (input & (PAD_CROSS | PAD_CIRCLE | PAD_LEFT | PAD_RIGHT)) {
-    const int direction = (input & PAD_LEFT) ? -1 : 1;
-    if (state->selectedGlobal == 0)
-      state->pendingBackground = (state->pendingBackground +
-                                  direction + LIBRARY_BACKGROUND_COUNT) %
-                                 LIBRARY_BACKGROUND_COUNT;
-    else if (state->selectedGlobal == 1)
-      changeOptionsGlassColor(state,
-          (state->pendingGlassColor + direction + GLASS_COLOR_COUNT) % GLASS_COLOR_COUNT);
-    else if (state->selectedGlobal == 2)
-      state->pendingFont = (state->pendingFont + direction + UI_FONT_COUNT) % UI_FONT_COUNT;
-    else if (state->selectedGlobal == 3)
-      state->pendingLogo = !state->pendingLogo;
-    else if (state->selectedGlobal == 4)
-      state->pendingCore = !state->pendingCore;
-    else
-      state->pendingAmbient = !state->pendingAmbient;
-    if (!optionsGlobalDirty(state->pendingBackground, state->pendingGlassColor,
-        state->pendingFont, state->pendingAmbient, state->pendingLogo, state->pendingCore,
-        *state->ambientOrbsBackgroundSetting, *state->glassColorSetting,
-        *state->fontSetting, *state->ambientEnabled, state->logoSetting, state->coreSetting)) return 0;
-    state->saveError = 0;
-    if (state->pendingBackground != *state->ambientOrbsBackgroundSetting ||
-        state->pendingGlassColor != *state->glassColorSetting ||
-        state->pendingFont != *state->fontSetting ||
-        state->pendingAmbient != *state->ambientEnabled) {
-      LunaAppearance candidate;
-      state->saveErrorLabel = lunaText("Could not save appearance settings");
-      state->saveError = loadAppearance(state->target, &candidate);
-      if (!state->saveError) {
-        candidate.background = state->pendingBackground;
-        candidate.glassColor = state->pendingGlassColor;
-        candidate.font = state->pendingFont;
-        candidate.ambientSound = state->pendingAmbient;
-        int backgroundChanged = state->pendingBackground != *state->ambientOrbsBackgroundSetting;
-        int fontChanged = state->pendingFont != *state->fontSetting;
-        int fontAttempted = 0;
-        if (backgroundChanged) {
-          state->saveErrorLabel = lunaText("Could not load background");
-          state->saveError = setLibraryBackground((LibraryBackground)candidate.background);
-        }
-        if (!state->saveError && fontChanged) {
-          fontAttempted = 1;
-          state->saveErrorLabel = lunaText("Could not load font");
-          state->saveError = setUIFont((UIFont)candidate.font);
-        }
-        if (!state->saveError) {
-          state->saveErrorLabel = lunaText("Could not save appearance settings");
-          state->saveError = saveAppearance(state->target, &candidate);
-        }
-        if (state->saveError) {
-          if (backgroundChanged)
-            setLibraryBackground((LibraryBackground)*state->ambientOrbsBackgroundSetting);
-          if (fontAttempted)
-            setUIFont((UIFont)*state->fontSetting);
-          setGlassColorPreset((GlassColorPreset)*state->glassColorSetting);
-        } else {
-          *state->ambientOrbsBackgroundSetting = candidate.background;
-          *state->glassColorSetting = candidate.glassColor;
-          *state->fontSetting = candidate.font;
-          *state->ambientEnabled = candidate.ambientSound;
-          setGlassColorPreset((GlassColorPreset)candidate.glassColor);
-          ambientSetEnabled(candidate.ambientSound);
-        }
-      }
-    }
-    if (state->pendingCore != state->coreSetting) {
-      int result = saveGameCoreOpl(state->target, state->pendingCore);
-      if (!result) {
-        state->coreSetting = state->pendingCore;
-        lunaApplyGlobalGameCore(state->titleArguments, state->coreSetting);
-        lunaGameOptionsRead(&state->gameOptions, state->titleArguments);
-      } else if (!state->saveError) {
-        state->saveError = result;
-        state->saveErrorLabel = "Could not save game core setting";
-      }
-    }
-    if (state->pendingLogo != state->logoSetting) {
-      int result = savePS2LogoEnabled(state->target, state->pendingLogo);
-      if (!result) {
-        state->logoSetting = state->pendingLogo;
-        lunaApplyGlobalPS2Logo(state->titleArguments, state->logoSetting);
-        lunaGameOptionsRead(&state->gameOptions, state->titleArguments);
-      } else if (!state->saveError) {
-        state->saveError = result;
-        state->saveErrorLabel = lunaText("Could not save PS2 logo setting");
-      }
-    }
-    if (state->saveError) {
-      state->pendingBackground = *state->ambientOrbsBackgroundSetting;
-      state->pendingGlassColor = *state->glassColorSetting;
-      state->pendingFont = *state->fontSetting;
-      state->pendingAmbient = *state->ambientEnabled;
-      state->pendingCore = state->coreSetting;
-      state->pendingLogo = state->logoSetting;
-    }
-  } else if (input & PAD_TRIANGLE) {
-    return 1;
-  }
-  return 0;
 }
 
 // Returns 1 for Back, -1 if a test launch unexpectedly returns, or 0 to stay.
@@ -1953,50 +1200,16 @@ static int handleGameInput(OptionsMenuState *state, int input) {
   return 0;
 }
 
-// Runs the Game, Global, Views, and Orbs settings tabs.
+// Runs settings for the selected game.
 // Returns -1 if a test launch unexpectedly returns.
-int uiTitleOptionsLoop(Target *target, int *classicArtOverlap,
-                       int *ambientOrbsBackgroundSetting, int *glassColorSetting,
-                       int *fontSetting, int *ambientEnabled, int *orbsThemeSetting,
-                       int *orbsAppearanceSetting, int *orbsColorSetting,
-                       int *tailsColorSetting, uint32_t *enabledOrbShapes,
-                        uint32_t *enabledViews) {
+int uiTitleOptionsLoop(Target *target) {
   int res = 0;
-  int logoSetting = loadPS2LogoEnabled(target);
-  int coreSetting = loadGameCoreOpl(target);
   OptionsMenuState state = {
       .target = target,
-      .classicArtOverlap = classicArtOverlap,
-      .ambientOrbsBackgroundSetting = ambientOrbsBackgroundSetting,
-      .glassColorSetting = glassColorSetting,
-      .fontSetting = fontSetting,
-      .ambientEnabled = ambientEnabled,
-      .logoSetting = logoSetting,
-      .coreSetting = coreSetting,
-      .orbsThemeSetting = orbsThemeSetting,
-      .orbsAppearanceSetting = orbsAppearanceSetting,
-      .orbsColorSetting = orbsColorSetting,
-      .tailsColorSetting = tailsColorSetting,
-      .enabledOrbShapes = enabledOrbShapes,
-      .enabledViews = enabledViews,
-      .pendingOverlap = *classicArtOverlap,
-      .pendingBackground = *ambientOrbsBackgroundSetting,
-      .pendingGlassColor = *glassColorSetting,
-      .pendingFont = *fontSetting,
-      .pendingPs1CaseStyle = getPs1CaseStyle(),
-      .pendingCollectionGameList = getCollectionGameList(),
-      .pendingAmbient = *ambientEnabled,
-      .pendingLogo = logoSetting,
-      .pendingCore = coreSetting,
-      .pendingOrbsTheme = *orbsThemeSetting,
-      .pendingOrbsAppearance = *orbsAppearanceSetting,
-      .pendingOrbsColor = *orbsColorSetting,
-      .pendingTailsColor = *tailsColorSetting,
-      .pendingOrbShapes = *enabledOrbShapes,
-      .pendingViews = *enabledViews,
+      .logoSetting = loadPS2LogoEnabled(target),
+      .coreSetting = loadGameCoreOpl(target),
       .page = OPTIONS_PER_GAME,
-      .gameSection = GAME_HUB,
-      .selectedView = UI_VIEW_CLASSIC};
+      .gameSection = GAME_HUB};
   snprintf(state.titleHeader, sizeof(state.titleHeader), "%.38s  (%s)",
            target->name, target->id);
 
@@ -2030,35 +1243,6 @@ int uiTitleOptionsLoop(Target *target, int *classicArtOverlap,
 
     // Process user inputs
     input = readInput();
-    if (input & PAD_L1) {
-      state.page = optionsNextPage(state.page, -1);
-      state.orbsShapesPage = 0;
-      state.selector.initialized = 0;
-      state.saveError = 0;
-      continue;
-    }
-    if (input & PAD_R1) {
-      state.page = optionsNextPage(state.page, 1);
-      state.orbsShapesPage = 0;
-      state.selector.initialized = 0;
-      state.saveError = 0;
-      continue;
-    }
-    if (state.page == OPTIONS_ORBS) {
-      if (handleOrbsInput(&state, input))
-        goto exit;
-      continue;
-    }
-    if (state.page == OPTIONS_VIEWS) {
-      if (handleViewsInput(&state, input))
-        goto exit;
-      continue;
-    }
-    if (state.page == OPTIONS_GLOBAL) {
-      if (handleSystemInput(&state, input))
-        goto exit;
-      continue;
-    }
     int action = handleGameInput(&state, input);
     if (action != 0) {
       res = action == STORAGE_UI_REFRESH ? action : action < 0 ? -1 : 0;
@@ -2067,11 +1251,6 @@ int uiTitleOptionsLoop(Target *target, int *classicArtOverlap,
   }
 exit:
   if (res >= 0) {
-    state.pendingOrbsTheme = *state.orbsThemeSetting;
-    state.pendingOrbsAppearance = *state.orbsAppearanceSetting;
-    state.pendingOrbsColor = *state.orbsColorSetting;
-    state.pendingTailsColor = *state.tailsColorSetting;
-    state.pendingOrbShapes = *state.enabledOrbShapes;
     transitionStart = uiNowMs();
     do {
       transitionProgress = optionsTransitionProgress(
@@ -2079,8 +1258,6 @@ exit:
       drawTitleOptionsFrame(&state, transitionProgress, 2);
     } while (transitionProgress < 1000);
   }
-  // Restore the saved color while the closing frame is fully black.
-  setGlassColorPreset((GlassColorPreset)*state.glassColorSetting);
   freeArgumentList(state.titleArguments);
   lunaCheatFileFree(&state.cheatFile);
   return res;

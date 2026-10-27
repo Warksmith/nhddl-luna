@@ -1,5 +1,9 @@
 // Storage browser, VMC manager, and the library's Start menu.
 #include "ui/file_manager.h"
+#include "ui/ring_menu.h"
+#include "ui/cube_menu.h"
+#include "ui/appearance_menu.h"
+#include "ui/appearance.h"
 #include "ui/file_browser.h"
 #include "ui/file_operations.h"
 #include "ui/text_file.h"
@@ -66,21 +70,20 @@ typedef struct {
 } CopyQueue;
 
 typedef struct {
-  int paneTop, listTop, listBottom, paneBottom, summaryTop, statusTop;
+  int paneTop, listTop, listBottom, paneBottom, summaryTop;
   int rowStep, visible;
 } FileManagerLayout;
 
 static FileManagerLayout fileManagerLayout(void) {
   int line = getFontLineHeight();
   FileManagerLayout layout = {0};
-  layout.paneTop = 52;
-  layout.listTop = layout.paneTop + 2 * line + 22;
-  layout.summaryTop = gsGlobal->Height - footerHeight - 2 * line - 16;
-  layout.paneBottom = layout.summaryTop - 8;
-  layout.listBottom = layout.paneBottom - 6;
-  layout.statusTop = layout.summaryTop + line + 8;
-  layout.rowStep = line + line / 2;
-  layout.visible = (layout.listBottom - layout.listTop) / layout.rowStep;
+  layout.paneTop = 48;
+  layout.listTop = layout.paneTop + 2 * line + 12;
+  layout.summaryTop = gsGlobal->Height - footerHeight - line - 10;
+  layout.paneBottom = layout.summaryTop - 6;
+  layout.listBottom = layout.paneBottom - 4;
+  layout.rowStep = line + 6;
+  layout.visible = 1 + (layout.listBottom - layout.listTop - line) / layout.rowStep;
   if (layout.visible < 1) layout.visible = 1;
   return layout;
 }
@@ -110,10 +113,6 @@ typedef struct {
   int toY;
   uint32_t startMs;
 } BrowserSelector;
-
-typedef struct {
-  int hasLibrary;
-} MainMenuContext;
 
 static int browserSelectorProgress(const BrowserSelector *menu, uint32_t now) {
   uint32_t elapsed = now - menu->startMs;
@@ -282,6 +281,8 @@ static void drawBrowserFrameSelected(const char *heading, const char *path,
   int listTop = 112;
   int listBottom = gsGlobal->Height - footerHeight - lineHeight;
   int visible = (listBottom - listTop) / rowStep;
+  if (visible < 1) visible = 1;
+  int rowRight = right - (count > visible ? 14 : 0);
   int selectorY = selector != NULL
       ? browserSelectorY(selector, selected, first,
                            listTop + (selected - first) * rowStep) : -1;
@@ -298,9 +299,11 @@ static void drawBrowserFrameSelected(const char *heading, const char *path,
       continue;
     drawBrowserRow(listTop + (index - first) * rowStep,
                    index == selected, name, detail[0] ? detail : NULL,
-                   right, selectorY,
-                   selector != NULL && !selector->wordOnly ? right : 0);
+                   rowRight, selectorY,
+                   selector != NULL && !selector->wordOnly ? rowRight : 0);
   }
+  drawListScrollbar(right - 6, listTop, listTop + visible * rowStep,
+                     count, first, visible, 6);
   if (count == 0)
     drawTextWindow(left + 18, listTop, right, listTop + lineHeight,
                    0, HeaderTextColor, ALIGN_LEFT, lunaText("Nothing to show"));
@@ -523,16 +526,18 @@ static void drawFileManagerList(const char *title, const char *subtitle,
   int visible = (bottom - line - 28 - y) / step;
   if (visible < 1) visible = 1;
   int first = selected / visible * visible;
+  int rowRight = right - 10 - (count > visible ? 14 : 0);
   for (int i = first; i < count && i < first + visible; i++) {
     char name[PATH_MAX + 16], detail[PATH_MAX + 16];
     if (!row(i, name, sizeof(name), detail, sizeof(detail), context)) continue;
     int rowY = y + (i - first) * step;
-    if (i == selected) drawFileManagerSelection(left + 10, rowY, right - 10, line, 1);
-    fileManagerFitText(name, right - left - 36, fitted, sizeof(fitted), 0);
-    drawTextWindow(left + 18, rowY, right - 18, rowY + line, 14,
+    if (i == selected) drawFileManagerSelection(left + 10, rowY, rowRight, line, 1);
+    fileManagerFitText(name, rowRight - left - 26, fitted, sizeof(fitted), 0);
+    drawTextWindow(left + 18, rowY, rowRight - 8, rowY + line, 14,
                    i == selected ? ColorSelectedText : FontMainColor,
                    ALIGN_LEFT, fitted);
   }
+  drawListScrollbar(right - 16, y, y + visible * step, count, first, visible, 14);
   drawFileManagerModalHelp(left, right, bottom, help);
   presentBrowserFrame();
 }
@@ -902,22 +907,25 @@ static int chooseFileAction(const BrowserPane *pane, const CopyQueue *queue,
     int x = right - width - 12, bottom = top + height;
     drawFileManagerModal(x, top, x + width, bottom, title);
     int first = selected >= rows ? selected - rows + 1 : 0;
+    int rowRight = x + width - 8 - (menu.count > rows ? 14 : 0);
     for (int i = first; i < menu.count && i < first + rows; i++) {
       int y = top + line + 30 + (i - first) * step;
       int action = menu.actions[i];
-      if (i == selected) drawFileManagerSelection(x + 8, y, x + width - 8, line, 1);
+      if (i == selected) drawFileManagerSelection(x + 8, y, rowRight, line, 1);
       int submenu = action == FILE_ACTION_FOLDER_MENU ||
           action == FILE_ACTION_SORT_MENU || action == FILE_ACTION_SELECTION_MENU;
       char label[160];
-      fileManagerFitText(fileActionLabel(action), width - 44, label, sizeof(label), 0);
+      fileManagerFitText(fileActionLabel(action), rowRight - x - 36, label, sizeof(label), 0);
       uint64_t color = action == FILE_ACTION_DELETE || action == FILE_ACTION_DELETE_MARKED ?
           ErrorTextColor : i == selected ? ColorSelectedText : FontMainColor;
-      drawTextWindow(x + 16, y, x + width - 28, y + line, 14, color, ALIGN_LEFT, label);
+      drawTextWindow(x + 16, y, rowRight - 20, y + line, 14, color, ALIGN_LEFT, label);
       const char *detail = submenu ? ">" :
           page == FILE_ACTION_SORT_MENU && action - FILE_ACTION_SORT_NAME == (int)pane->sort ? "*" : "";
-      drawTextWindow(x + width - 28, y, x + width - 14, y + line, 14,
+      drawTextWindow(rowRight - 20, y, rowRight - 6, y + line, 14,
                      HeaderTextColor, ALIGN_RIGHT, detail);
     }
+    drawListScrollbar(x + width - 14, top + line + 30,
+                       top + line + 30 + rows * step, menu.count, first, rows, 14);
     drawFileManagerModalHelp(x, x + width, bottom, PROMPT_TWO(
         ICON_CROSS, lunaText("Select"), ICON_CIRCLE, lunaText("Back")));
     presentBrowserFrame();
@@ -1170,11 +1178,12 @@ static void drawFileManagerContents(const BrowserRoot *roots, int rootCount,
   int target = queue->count && !trayCollapsed ? (right - left) / 4 : 0;
   int trayWidth = fileManagerTrayWidth(target);
   int browserRight = right - (trayWidth > 0 ? trayWidth + 10 : 0);
-  int x1 = left + 10, x2 = browserRight - 10;
   int total = browser->root < 0 ? rootCount : browser->visibleCount;
+  int x1 = left + 10;
+  int x2 = browserRight - 10 - (total > layout.visible ? 14 : 0);
   int selected = browser->root < 0 ? browser->rootSelected : browser->selected;
   int first = selected / layout.visible * layout.visible;
-  char text[PATH_MAX + 160], fitted[PATH_MAX + 160];
+  char text[PATH_MAX + 160], fitted[PATH_MAX + 160], summary[128];
   gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
   drawBrowserSheet(1);
   drawTextWindow(left, headerHeight - line, right, headerHeight + 2,
@@ -1206,16 +1215,16 @@ static void drawFileManagerContents(const BrowserRoot *roots, int rootCount,
     // Convert parent separators into a readable, font-safe breadcrumb trail.
     for (char *c = text; *c; c++) if (*c == '/') *c = '>';
     fileManagerFitText(text, x2 - x1, trail, sizeof(trail), 1);
-    drawTextWindow(x1 + 4, layout.paneTop + 7, x2 - 4,
-                   layout.paneTop + 7 + line, 5, HeaderTextColor, ALIGN_LEFT, trail);
+    drawTextWindow(x1 + 4, layout.paneTop + 4, x2 - 4,
+                   layout.paneTop + 4 + line, 5, HeaderTextColor, ALIGN_LEFT, trail);
     fileManagerFitText(current, x2 - x1, fitted, sizeof(fitted), 0);
     folder = fitted;
   }
-  drawTextWindow(x1 + 4, layout.paneTop + line + 10, x2 - 4,
-                 layout.paneTop + 2 * line + 10, 5,
+  drawTextWindow(x1 + 4, layout.paneTop + line + 6, x2 - 4,
+                 layout.paneTop + 2 * line + 6, 5,
                  FontMainColor, ALIGN_LEFT, folder);
-  gsKit_prim_sprite(gsGlobal, x1, layout.listTop - 9, x2,
-                    layout.listTop - 8, 4,
+  gsKit_prim_sprite(gsGlobal, x1, layout.listTop - 3, browserRight - 10,
+                    layout.listTop - 2, 4,
                     glassPresetColor(0x78, 0x9A, 0xB0, 0x24));
   for (int index = first; index < total && index < first + layout.visible; index++) {
     char name[PATH_MAX + 16], detail[48] = "";
@@ -1252,6 +1261,8 @@ static void drawFileManagerContents(const BrowserRoot *roots, int rootCount,
       drawTextWindow(x2 - detailWidth, y, x2, y + line, 5,
                      HeaderTextColor, ALIGN_RIGHT, detail);
   }
+  drawListScrollbar(browserRight - 16, layout.listTop, layout.listBottom,
+                     total, first, layout.visible, 5);
   if (!total && !browser->scanning)
     drawTextWindow(x1 + 4, layout.listTop, x2, layout.listTop + line, 5,
                    FontMainColor, ALIGN_LEFT, lunaText("Nothing to show"));
@@ -1288,10 +1299,7 @@ static void drawFileManagerContents(const BrowserRoot *roots, int rootCount,
   }
   int actionLeft = right - (right - left) * 2 / 5;
   fileManagerItemSummary(queue->count ? queue->count : total, queue->count > 0,
-      fileManagerScene.move && *fileManagerScene.move, text, sizeof(text));
-  fileManagerFitText(text, actionLeft - left - 18, fitted, sizeof(fitted), 0);
-  drawTextWindow(left + 8, layout.summaryTop, actionLeft - 10,
-                 layout.summaryTop + line, 5, HeaderTextColor, ALIGN_LEFT, fitted);
+      fileManagerScene.move && *fileManagerScene.move, summary, sizeof(summary));
   if (progressPercent < 0 && footer.count == 0 && queue->count) {
     const ButtonPrompt ready[] = {
         {ICON_R1, lunaText("Tray")}, {ICON_START,
@@ -1312,10 +1320,12 @@ static void drawFileManagerContents(const BrowserRoot *roots, int rootCount,
       message = text;
     }
   }
-  if (!message) message = "";
-  fileManagerFitText(message, right - left - 16, fitted, sizeof(fitted), 0);
-  drawTextWindow(left + 8, layout.statusTop, right - 8, layout.statusTop + line, 5,
-                 FontMainColor, ALIGN_LEFT, fitted);
+  if (!message || !*message) message = summary;
+  int statusRight = progressPercent < 0 && footer.count == 0 && queue->count ?
+      actionLeft - 10 : right - 8;
+  fileManagerFitText(message, statusRight - left - 8, fitted, sizeof(fitted), 0);
+  drawTextWindow(left + 8, layout.summaryTop, statusRight, layout.summaryTop + line, 5,
+                 HeaderTextColor, ALIGN_LEFT, fitted);
   if (progressPercent >= 0) {
     if (progressPercent > 100) progressPercent = 100;
     int filled = (right - left - 16) * progressPercent / 100;
@@ -2459,214 +2469,245 @@ static int storageRow(int index, char *name, size_t nameSize,
   return 1;
 }
 
-static int uiStorageLoop(void) {
-  StorageSettings settings = STORAGE_SETTINGS;
+typedef struct {
+  StorageSettings settings;
   char status[160];
-  snprintf(status, sizeof(status), "%s", lunaText("Select a source to enable or disable it."));
-  int selected = 0;
-  BrowserSelector selector = {.selected = -1};
-  while (1) {
-    const ButtonPrompt prompts[] = {{ICON_CROSS, lunaText("Select")}, {ICON_SQUARE, lunaText("Rescan")},
-                                   {ICON_CIRCLE, lunaText("Back")}};
-    drawBrowserFrameSelected(lunaText("Storage Devices"), lunaText("Connected devices only"), status,
-                     (PromptBar){NULL, prompts, 3}, 10, selected,
-                     browserFirstRow(selected), storageRow, &settings, &selector);
-    int input = readInput();
-    if (input & PAD_CIRCLE) return 0; // Discard pending edits.
+  int selected;
+  BrowserSelector selector;
+} StorageEditor;
+
+static void storageSubmenuBegin(void *context) {
+  StorageEditor *editor = context;
+  editor->settings = STORAGE_SETTINGS;
+  editor->selected = 0;
+  editor->selector = (BrowserSelector){.selected = -1};
+  snprintf(editor->status, sizeof(editor->status), "%s",
+           lunaText("Select a source to enable or disable it."));
+}
+
+static int storageX(int x) { return x * gsGlobal->Width / 640; }
+static int storageY(int y) { return y * gsGlobal->Height / 480; }
+static uint64_t storageInk(uint64_t color, float opacity) {
+  unsigned alpha = (unsigned)((color >> 24) & 255);
+  return (color & ~(0xffULL << 24)) | ((uint64_t)(alpha * opacity) << 24);
+}
+
+static void storageSubmenuDraw(void *context, float opacity) {
+  StorageEditor *editor = context;
+  int left = storageX(32), right = storageX(506);
+  int line = getFontLineHeight(), step = line + line / 3;
+  int top = storageY(127), bottom = storageY(370);
+  int visible = (bottom - top) / step;
+  if (visible < 1) visible = 1;
+  int first = editor->selected / visible * visible;
+  uint64_t ink = storageInk(HeaderTextColor, opacity);
+  uint64_t bright = storageInk(GS_SETREG_RGBA(0xF0, 0xFA, 0xFF, 0x80), opacity);
+  drawTextWindow(left, storageY(22), right, storageY(22) + line, 6, ink,
+                 ALIGN_LEFT, lunaText("System Configuration"));
+  drawTextWindow(left, storageY(60), right, storageY(60) + line, 6,
+                 storageInk(GS_SETREG_RGBA(232, 232, 70, 128), opacity),
+                 ALIGN_LEFT, lunaText("Storage Devices"));
+  drawGlassPanelWithOpacity(storageX(20),storageY(97),storageX(520),storageY(385),
+                            5,104,opacity);
+  drawTextWindow(left, storageY(100), right, storageY(100) + line, 6, ink,
+                 ALIGN_LEFT, lunaText("Connected devices only"));
+  int focusY = browserSelectorY(&editor->selector, editor->selected, first,
+                                top + (editor->selected - first) * step);
+  uiCubeSubmenuFocusDraw(left-4,focusY-1,right-10,focusY+line+2,opacity);
+  for (int index = first; index < 10 && index < first + visible; index++) {
+    char name[PATH_MAX + 3], detail[32], fitted[PATH_MAX + 3];
+    storageRow(index, name, sizeof(name), detail, sizeof(detail), &editor->settings);
+    int detailWidth = detail[0] ? (int)getLineWidth(detail) + 12 : 0;
+    int nameRight = right - 12 - detailWidth;
+    fileManagerFitText(name, nameRight - left - 8, fitted, sizeof(fitted), 0);
+    int y = top + (index - first) * step;
+    uint64_t color = index == editor->selected ? bright : ink;
+    drawTextWindow(left + 4, y, nameRight, y + line, 7, color, ALIGN_LEFT, fitted);
+    if (detail[0]) drawTextWindow(nameRight + 8, y, right - 12, y + line, 7,
+                                 color, ALIGN_RIGHT, detail);
+  }
+  if (opacity >= .999f)
+    drawListScrollbar(right - 6, top, top + visible * step, 10, first, visible, 7);
+  drawTextWindow(left, storageY(393), storageX(608), storageY(425), 7, ink,
+                 ALIGN_LEFT, editor->status);
+  const ButtonPrompt prompts[] = {{ICON_CROSS, lunaText("Select")},
+      {ICON_SQUARE, lunaText("Rescan")}, {ICON_CIRCLE, lunaText("Back")}};
+  drawPromptBar(left, storageY(426), storageX(608), storageY(464), 7, ink,
+                (PromptBar){NULL, prompts, 3});
+}
+
+static int storageSubmenuInput(void *context, int input) {
+  StorageEditor *editor = context;
+  StorageSettings *settings = &editor->settings;
+  char *status = editor->status;
+  int selected = editor->selected;
+  BrowserSelector *selector = &editor->selector;
+    if (input & PAD_CIRCLE) return LUNA_CUBE_SUBMENU_BACK; // Discard pending edits.
     if (input & PAD_UP) selected = (selected + 9) % 10;
     else if (input & PAD_DOWN) selected = (selected + 1) % 10;
     else if ((input & PAD_CROSS) && selected < STORAGE_SOURCE_COUNT) {
-      StorageSettings before = settings;
+      StorageSettings before = *settings;
       ModeType mode = storageSourceMode(selected);
-      settings.enabled ^= mode;
-      if ((settings.enabled & MODE_MX4SIO) && (settings.enabled & MODE_MMCE)) {
-        settings.enabled &= ~(mode == MODE_MX4SIO ? MODE_MMCE : MODE_MX4SIO);
-        snprintf(status, sizeof(status), lunaText("MX4SIO and MMCE cannot be enabled together."));
-      } else snprintf(status, sizeof(status), lunaText("Choose Apply changes & scan to save your selection."));
-      if (storageRequiredConflict(&settings)) {
-        settings = before;
-        snprintf(status, sizeof(status), lunaText("This conflicts with the device LUNA was started from."));
+      settings->enabled ^= mode;
+      if ((settings->enabled & MODE_MX4SIO) && (settings->enabled & MODE_MMCE)) {
+        settings->enabled &= ~(mode == MODE_MX4SIO ? MODE_MMCE : MODE_MX4SIO);
+        snprintf(status, sizeof(editor->status), lunaText("MX4SIO and MMCE cannot be enabled together."));
+      } else snprintf(status, sizeof(editor->status), lunaText("Choose Apply changes & scan to save your selection."));
+      if (storageRequiredConflict(settings)) {
+        *settings = before;
+        snprintf(status, sizeof(editor->status), lunaText("This conflicts with the device LUNA was started from."));
       }
     } else if ((input & PAD_CROSS) && selected == 7) {
       char ip[16];
-      snprintf(ip, sizeof(ip), "%s", settings.ip);
+      snprintf(ip, sizeof(ip), "%s", settings->ip);
       // The shared keyboard supports digits and dots; an empty value uses IPCONFIG.
       if (editFileName(lunaText("UDPFS console IP (empty uses IPCONFIG.DAT)"), ip, sizeof(ip), 15)) {
         if (storageValidIP(ip)) {
-          strcpy(settings.ip, ip);
-          snprintf(status, sizeof(status), lunaText("Apply changes to use this address for scanning and games."));
-        } else snprintf(status, sizeof(status), lunaText("Enter a valid unicast IPv4 address, such as 192.168.1.10."));
+          strcpy(settings->ip, ip);
+          snprintf(status, sizeof(editor->status), lunaText("Apply changes to use this address for scanning and games."));
+        } else snprintf(status, sizeof(editor->status), lunaText("Enter a valid unicast IPv4 address, such as 192.168.1.10."));
       }
     } else if ((input & PAD_CROSS) && selected == 8) {
-      if (storageRequiredConflict(&settings) || !storageValidSettings(&settings)) {
-        snprintf(status, sizeof(status), lunaText("These device settings conflict with the startup device."));
-        continue;
+      if (storageRequiredConflict(settings) || !storageValidSettings(settings)) {
+        snprintf(status, sizeof(editor->status), lunaText("These device settings conflict with the startup device."));
+        return LUNA_CUBE_SUBMENU_STAY;
       }
-      if (storageNeedsRestart(&settings)) {
+      if (storageNeedsRestart(settings)) {
         drawBrowserFrameSelected(lunaText("Restart storage drivers"), lunaText("Apply changes"),
                          lunaText("LUNA will reopen the library after restarting its drivers."),
                          PROMPT_TWO(ICON_CROSS, lunaText("Apply"), ICON_CIRCLE, lunaText("Cancel")),
-                         10, selected, browserFirstRow(selected), storageRow, &settings, &selector);
-        if (!(waitForInput(PAD_CROSS | PAD_CIRCLE) & PAD_CROSS)) continue;
+                         10, selected, browserFirstRow(selected), storageRow, settings, selector);
+        if (!(waitForInput(PAD_CROSS | PAD_CIRCLE) & PAD_CROSS)) return LUNA_CUBE_SUBMENU_STAY;
       }
-      if (storageSave(&settings)) {
-        snprintf(status, sizeof(status), lunaText("Could not save storage.cfg beside LUNA. Changes were not applied."));
-        continue;
+      if (storageSave(settings)) {
+        snprintf(status, sizeof(editor->status), lunaText("Could not save storage.cfg beside LUNA. Changes were not applied."));
+        return LUNA_CUBE_SUBMENU_STAY;
       }
-      if (!storageRequest(&settings, settings.enabled)) return STORAGE_UI_REFRESH;
+      if (!storageRequest(settings, settings->enabled)) return LUNA_CUBE_SUBMENU_DONE;
     } else if (((input & PAD_CROSS) && selected == 9) ||
                ((input & PAD_SQUARE) && selected < STORAGE_SOURCE_COUNT)) {
-      if (settings.enabled != STORAGE_SETTINGS.enabled || strcmp(settings.ip, STORAGE_SETTINGS.ip)) {
-        snprintf(status, sizeof(status), lunaText("Apply changes before rescanning, or go Back to discard them."));
-        continue;
+      if (settings->enabled != STORAGE_SETTINGS.enabled || strcmp(settings->ip, STORAGE_SETTINGS.ip)) {
+        snprintf(status, sizeof(editor->status), lunaText("Apply changes before rescanning, or go Back to discard them."));
+        return LUNA_CUBE_SUBMENU_STAY;
       }
-      ModeType scan = selected == 9 ? settings.enabled : storageSourceMode(selected);
-      if (!(scan & settings.enabled)) {
-        snprintf(status, sizeof(status), lunaText("Enable this source and apply changes before scanning it."));
-        continue;
+      ModeType scan = selected == 9 ? settings->enabled : storageSourceMode(selected);
+      if (!(scan & settings->enabled)) {
+        snprintf(status, sizeof(editor->status), lunaText("Enable this source and apply changes before scanning it."));
+        return LUNA_CUBE_SUBMENU_STAY;
       }
-      if (!storageRequest(&settings, scan)) return STORAGE_UI_REFRESH;
+      if (!storageRequest(settings, scan)) return LUNA_CUBE_SUBMENU_DONE;
     }
+  editor->selected = selected;
+  return LUNA_CUBE_SUBMENU_STAY;
+}
+
+typedef struct {
+  int selected;
+  const char *status;
+  LunaCubePageFocus focus;
+} LanguageEditor;
+static void languageSubmenuBegin(void *context) {
+  LanguageEditor *editor=context;
+  editor->selected=lunaLanguage();
+  editor->status="Choose the language used throughout LUNA.";
+  editor->focus=(LunaCubePageFocus){.selected=-1,.glideMs=110};
+}
+static const char *languageSubmenuLabel(void *context,int row) {
+  (void)context;return lunaLanguageName((LunaLanguage)row);
+}
+static const char *languageSubmenuValue(void *context,int row) {
+  (void)context;return row==(int)lunaLanguage()?"Selected":"";
+}
+static void languageSubmenuDraw(void *context,float opacity) {
+  LanguageEditor *editor=context;
+  LunaCubePage page={.title="Language",.count=LUNA_LANGUAGE_COUNT,
+      .label=languageSubmenuLabel,.value=languageSubmenuValue,
+      .context=editor,.status=editor->status};
+  uiCubeSubmenuPageDraw(&page,editor->selected,&editor->focus,opacity);
+}
+static int languageSubmenuInput(void *context,int input) {
+  LanguageEditor *editor=context;
+  if(input&(PAD_CIRCLE|PAD_TRIANGLE))return LUNA_CUBE_SUBMENU_BACK;
+  if(input&PAD_UP)editor->selected=(editor->selected+LUNA_LANGUAGE_COUNT-1)%LUNA_LANGUAGE_COUNT;
+  else if(input&PAD_DOWN)editor->selected=(editor->selected+1)%LUNA_LANGUAGE_COUNT;
+  else if(input&PAD_CROSS) {
+    if(!lunaLanguageSave((LunaLanguage)editor->selected))return LUNA_CUBE_SUBMENU_BACK;
+    editor->status="Could not save language. Check LUNA's folder.";
   }
+  return LUNA_CUBE_SUBMENU_STAY;
 }
 
-static int languageRow(int index, char *name, size_t nameSize,
-                       char *detail, size_t detailSize, void *context) {
-  snprintf(name, nameSize, "%s", lunaLanguageName((LunaLanguage)index));
-  snprintf(detail, detailSize, "%s", index == (int)lunaLanguage() ? lunaText("Selected") : "");
-  (void)context;
-  return 1;
-}
-
-static void uiLanguageLoop(void) {
-  int selected = lunaLanguage();
-  const char *status = lunaText("Choose the language used throughout LUNA.");
-  BrowserSelector selector = {.selected = -1, .wordOnly = 1};
-  while (1) {
-    drawBrowserFrameSelected("LUNA", lunaText("Language"), status,
-        PROMPT_TWO(ICON_CROSS, lunaText("Select"), ICON_CIRCLE, lunaText("Cancel")),
-        LUNA_LANGUAGE_COUNT, selected, 0, languageRow, NULL, &selector);
-    int input = readInput();
-    if (input & (PAD_CIRCLE | PAD_TRIANGLE)) return;
-    if (input & PAD_UP)
-      selected = (selected + LUNA_LANGUAGE_COUNT - 1) % LUNA_LANGUAGE_COUNT;
-    else if (input & PAD_DOWN)
-      selected = (selected + 1) % LUNA_LANGUAGE_COUNT;
-    else if (input & PAD_CROSS) {
-      if (!lunaLanguageSave((LunaLanguage)selected)) return;
-      status = lunaText("Could not save language. Check LUNA's folder.");
-    }
+static const char *startMenuStatus(int hasLibrary) {
+  int scanFailed = 0, scanIncomplete = 0;
+  for (int source = 0; source < STORAGE_SOURCE_COUNT; source++) {
+    if (STORAGE_STATUS[source].error) scanFailed = 1;
+    if (STORAGE_STATUS[source].incomplete ||
+        (STORAGE_STATUS[source].error && STORAGE_STATUS[source].games)) scanIncomplete = 1;
   }
+  if (scanIncomplete) return lunaText("Some items could not be scanned");
+  if (!hasLibrary) return lunaText(scanFailed ? "Scan failed" : "No games found");
+  return NULL;
 }
 
-static int mainMenuRow(int index, char *name, size_t nameSize,
-                       char *detail, size_t detailSize, void *context) {
-  int hasLibrary = ((MainMenuContext *)context)->hasLibrary;
-  const char *label = index == 0 ? lunaText("File Explorer") :
-                      index == 1 ? lunaText("Virtual Memory Cards") :
-                      index == 2 ? lunaText("Storage Devices") :
-                      index == 3 ? lunaText("Language") :
-                      (hasLibrary && index == 4 ? lunaText("Return to Library") :
-                       index == (hasLibrary ? 6 : 5) ? lunaText("Shutdown") : lunaText("Exit LUNA"));
-  snprintf(name, nameSize, "%s", label);
-  detail[0] = '\0';
-  (void)detailSize;
-  return 1;
+static void waitMenuButtonRelease(void) {
+  while (pollInput() & (PAD_CROSS | PAD_CIRCLE | PAD_TRIANGLE | PAD_START))
+    usleep(1000);
 }
 
-static void drawMainMenuFrame(const char *subtitle, int count, int selected,
-                               MainMenuContext *menu, BrowserSelector *selector,
-                               int confirmShutdown) {
-  int lineHeight = getFontLineHeight();
-  int rowStep = lineHeight + lineHeight / 3;
-  int listTop = 112;
-  int panelWidth = 320;
-  char labels[7][128];
-  for (int index = 0; index < count; ++index) {
-    char detail[1];
-    mainMenuRow(index, labels[index], sizeof(labels[index]), detail, sizeof(detail), menu);
-    int width = (int)getLineWidth(labels[index]) + 64;
-    if (width > panelWidth) panelWidth = width;
-  }
-  int maxWidth = gsGlobal->Width - 2 * (keepoutArea + 30);
-  if (panelWidth > maxWidth) panelWidth = maxWidth;
-  int left = (gsGlobal->Width - panelWidth) / 2;
-  int right = left + panelWidth;
-  int selectorY = browserSelectorY(selector, selected, 0,
-                                   listTop + selected * rowStep);
-  gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
-  drawBrowserSheetPanel(left, 78, right, gsGlobal->Height - footerHeight + 3);
-  drawTextWindow(left, headerHeight - lineHeight, right, headerHeight + 2,
-                 0, HeaderTextColor, ALIGN_HCENTER, "LUNA");
-  drawTextWindow(left + 16, 82, right - 16, 82 + lineHeight,
-                 0, FontMainColor, ALIGN_HCENTER, subtitle);
-  drawMenuRowSelector(left + 12, selectorY, right - 12);
-  for (int index = 0; index < count; ++index) {
-    char fitted[128];
-    fileManagerFitText(labels[index], panelWidth - 48, fitted, sizeof(fitted), 0);
-    int y = listTop + index * rowStep;
-    drawTextWindow(left + 24, y, right - 24, y + lineHeight, 0,
-                   index == selected ? GS_SETREG_RGBA(0xF0, 0xFA, 0xFF, 0x80)
-                                     : HeaderTextColor,
-                   ALIGN_HCENTER, fitted);
-  }
-  if (confirmShutdown)
-    drawTextWindow(left + 16, gsGlobal->Height - footerHeight - lineHeight,
-                   right - 16, gsGlobal->Height - footerHeight, 0,
-                   HeaderTextColor, ALIGN_HCENTER, lunaText("Power off the console?"));
-  presentBrowserFrame();
-}
-
-int uiMainMenuLoop(int hasLibrary) {
+static int uiSystemSettingsLoop(int hasLibrary, Target *target) {
   int selected = 0;
-  int count = hasLibrary ? 7 : 6;
-  MainMenuContext menu = {.hasLibrary = hasLibrary};
-  BrowserSelector selector = {.selected = -1, .wordOnly = 1};
-  while (1) {
-    int scanFailed = 0, scanIncomplete = 0;
-    for (int source = 0; source < STORAGE_SOURCE_COUNT; source++) {
-      if (STORAGE_STATUS[source].error) scanFailed = 1;
-      if (STORAGE_STATUS[source].incomplete ||
-          (STORAGE_STATUS[source].error && STORAGE_STATUS[source].games)) scanIncomplete = 1;
+  StorageEditor storage = {0};
+  VmcEditor vmc = {0};
+  LanguageEditor language = {0};
+  const LunaCubeSubmenu submenus[4] = {
+    {.context=&vmc,.begin=vmcSubmenuBegin,.draw=vmcSubmenuDraw,
+     .input=vmcSubmenuInput,.end=vmcSubmenuEnd},
+    {.context=&storage,.begin=storageSubmenuBegin,.draw=storageSubmenuDraw,
+     .input=storageSubmenuInput},
+    {.context=&language,.begin=languageSubmenuBegin,.draw=languageSubmenuDraw,
+     .input=languageSubmenuInput},
+    uiGameDefaultsSubmenu(target)
+  };
+  for (;;) {
+    int action = uiCubeSettingsLoop(&selected, startMenuStatus(hasLibrary), submenus);
+    waitMenuButtonRelease();
+    switch (action) {
+      case LUNA_CUBE_BACK: return -1;
+      case LUNA_CUBE_STORAGE:
+        return STORAGE_UI_REFRESH;
+      case LUNA_CUBE_EXIT: return 1;
+      case LUNA_CUBE_SHUTDOWN:
+        // The cube menu requires a separate confirmation press before returning.
+        powerOffConsole();
+        while (1) sleep(1);
+      default: return -1;
     }
-    drawMainMenuFrame(scanIncomplete ? lunaText("Some items could not be scanned") :
-                     hasLibrary ? lunaText("Main menu") :
-                     scanFailed ? lunaText("Scan failed") : lunaText("No games found"),
-                     count, selected, &menu, &selector, 0);
-    int input = readInput();
-    if ((input & (PAD_TRIANGLE | PAD_CIRCLE)) && hasLibrary)
-      return 0;
-    if (input & PAD_UP)
-      selected = (selected + count - 1) % count;
-    else if (input & PAD_DOWN)
-      selected = (selected + 1) % count;
-    else if (input & PAD_CROSS) {
-      if (selected == 0)
-        uiFileManagerLoop();
-      else if (selected == 1) {
-#ifdef LUNA_ENABLE_PSXCORE
-        uiVMCPlatformLoop();
-#else
-        uiVMCManagerLoop();
-#endif
-      }
-      else if (selected == 2) {
-        if (uiStorageLoop() == STORAGE_UI_REFRESH) return STORAGE_UI_REFRESH;
-      }
-      else if (selected == 3)
-        uiLanguageLoop();
-      else if (hasLibrary && selected == 4)
-        return 0;
-      else if (selected == count - 1) {
-        drawMainMenuFrame(lunaText("Confirm shutdown"), count, selected,
-                           &menu, &selector, 1);
-        if (waitForInput(PAD_CROSS | PAD_CIRCLE | PAD_TRIANGLE) & PAD_CROSS) {
-          powerOffConsole();
-          while (1)
-            sleep(1);
-        }
-      } else
-        return 1;
+  }
+}
+
+int uiMainMenuLoop(int hasLibrary, Target *target) {
+  // Empty libraries still have a metadata device; no selected game is needed.
+  Target settingsTarget = {0};
+  if (!target) {
+    for (int i=0;i<MAX_DEVICES;i++) {
+      if (deviceModeMap[i].mountpoint && deviceModeMap[i].mode!=MODE_NONE &&
+          deviceModeMap[i].mode!=MODE_ALL) {settingsTarget.device=&deviceModeMap[i];break;}
+    }
+    target=&settingsTarget;
+  }
+  LunaAppearance appearance;
+  loadAppearance(target,&appearance);
+  uiRingSetColor((LunaRingColor)appearance.ringColor);
+  for (;;) {
+    int action = uiRingMenuLoop(hasLibrary, startMenuStatus(hasLibrary));
+    // Consume the activation press before entering another interactive screen.
+    waitMenuButtonRelease();
+    if (action == LUNA_RING_LIBRARY) return 0;
+    if (action == LUNA_RING_BROWSER) uiFileManagerLoop();
+    else if (action == LUNA_MENU_APPEARANCE) uiAppearanceLoop(target);
+    else {
+      int result = uiSystemSettingsLoop(hasLibrary,target);
+      if (result >= 0) return result;
     }
   }
 }
