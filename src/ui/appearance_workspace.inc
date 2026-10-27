@@ -10,6 +10,24 @@ static uint64_t apInk(int r,int g,int b,float opacity) {
 static void apRect(float x,float y,float width,float height,uint64_t color) {
   gsKit_prim_sprite(gsGlobal,apX(x),apY(y),apX(x+width),apY(y+height),5,color);
 }
+static void apFocusFrame(float x,float y,float width,float height,float opacity) {
+  uint64_t glow=apInk(95,220,255,opacity*.18f);
+  uint64_t edge=apInk(95,220,255,opacity*.9f);
+  // Broad, steady edges remain legible in interlaced output.
+  apRect(x-2,y-2,width+4,2,glow);
+  apRect(x-2,y+height,width+4,2,glow);
+  apRect(x-2,y,2,height,glow);
+  apRect(x+width,y,2,height,glow);
+  apRect(x,y,width,2,edge);
+  apRect(x,y+height-2,width,2,edge);
+  apRect(x,y+2,2,height-4,edge);
+  apRect(x+width-2,y+2,2,height-4,edge);
+}
+static void apFocusRow(float x,float y,float width,float height,float opacity) {
+  apRect(x,y,width,height,apInk(24,83,115,opacity*.88f));
+  apFocusFrame(x,y,width,height,opacity*.8f);
+  apRect(x,y,3,height,apInk(170,239,255,opacity));
+}
 static void apGlassPanel(float x,float y,float width,float height,float opacity) {
   // Use the same preset-aware glass as the rest of LUNA. The actual panels
   // are the live color feedback; no separate sample palette is necessary.
@@ -60,14 +78,22 @@ static void appearanceWorkspaceDraw(void *context,float opacity) {
   apGlassPanel(20,66,224,336,opacity*.82f);
   // Background selection uses the actual full-screen background, not a copy.
   if(s->category!=AP_BACKGROUND)apGlassPanel(260,94,350,252,opacity*.76f);
+  if(s->focus==AP_FOCUS_CATEGORIES)apFocusFrame(20,66,224,336,opacity);
+  else if(s->focus==AP_FOCUS_CONTROLS) {
+    if(s->category!=AP_BACKGROUND)apFocusFrame(260,94,350,252,opacity);
+    apRect(260,67,3,23,cyan);
+  }
   apLine(32,26,330,bright,"Appearance");
   apLine(32,75,195,s->focus==AP_FOCUS_CATEGORIES?cyan:muted,
       s->focus==AP_FOCUS_CATEGORIES?"Choose a category":"Categories");
   for(int i=0;i<AP_WORKSPACE_CATEGORIES;i++) {
     int category=appearanceWorkspaceCategories[i],active=category==s->category;
     if(active) {
-      apRect(28,110+42*i,208,32,apInk(29,76,107,opacity*(s->focus==AP_FOCUS_CATEGORIES?.88f:.46f)));
-      apRect(28,110+42*i,3,32,cyan);
+      if(s->focus==AP_FOCUS_CATEGORIES)apFocusRow(28,110+42*i,208,32,opacity);
+      else {
+        apRect(28,110+42*i,208,32,apInk(29,76,107,opacity*.34f));
+        apRect(28,110+42*i,3,32,apInk(95,220,255,opacity*.4f));
+      }
     }
     apLine(40,115+42*i,184,active?bright:muted,categories[category]);
   }
@@ -78,7 +104,7 @@ static void appearanceWorkspaceDraw(void *context,float opacity) {
   if(row>=count)row=s->rows[s->category]=0;
   if(s->category==AP_BACKGROUND) {
     apGlassPanel(270,101,330,39,opacity*.72f);
-    if(s->focus==AP_FOCUS_CONTROLS&&row==0)apRect(270,101,330,39,apInk(24,83,115,opacity*.9f));
+    if(s->focus==AP_FOCUS_CONTROLS&&row==0)apFocusRow(270,101,330,39,opacity);
     apLine(281,111,19,cyan,"<");
     apLine(306,111,257,bright,backgrounds[s->pending.background]);
     apLine(576,111,19,cyan,">");
@@ -89,7 +115,7 @@ static void appearanceWorkspaceDraw(void *context,float opacity) {
       for(int i=first;i<count-1&&i<first+visible;i++) {
         int y=183+(i-first)*50;
         apGlassPanel(270,y-2,330,45,opacity*.72f);
-        if(s->focus==AP_FOCUS_CONTROLS&&row==i+1)apRect(270,y-2,330,45,apInk(23,69,98,opacity*.9f));
+        if(s->focus==AP_FOCUS_CONTROLS&&row==i+1)apFocusRow(270,y-2,330,45,opacity);
         apLine(281,y,306,row==i+1?bright:muted,appearanceWorkspaceRowText(s,i+1,0));
         apLine(294,y+22,290,row==i+1?cyan:muted,appearanceWorkspaceRowText(s,i+1,1));
       }
@@ -103,7 +129,7 @@ static void appearanceWorkspaceDraw(void *context,float opacity) {
     for(int i=first;i<count&&i<first+visible;i++) {
       int y=103+(i-first)*47;
       if(i==row&&s->focus==AP_FOCUS_CONTROLS)
-        apRect(270,y-2,330,44,apInk(23,69,98,opacity*.85f));
+        apFocusRow(270,y-2,330,44,opacity);
       apLine(281,y,306,i==row?bright:muted,appearanceRowLabel(s,i));
       apLine(294,y+21,290,i==row?cyan:muted,appearanceRowValue(s,i));
     }
@@ -127,23 +153,33 @@ static void appearanceWorkspaceDraw(void *context,float opacity) {
       muted,ALIGN_LEFT,lunaText(description));
   for(int i=0;i<2;i++) {
     int active=s->focus==AP_FOCUS_ACTIONS&&s->action==i;
-    apRect(278+i*165,421,153,29,active?apInk(24,95,126,opacity):apInk(9,24,41,opacity*.9f));
+    if(active)apFocusRow(278+i*165,421,153,29,opacity);
+    else apRect(278+i*165,421,153,29,apInk(9,24,41,opacity*.9f));
     apLine(294+i*165,425,126,active?bright:muted,i?"Discard":"Apply");
+  }
+  if(s->focus==AP_FOCUS_EXIT) {
+    // Dim the complete workspace before drawing the active dialog and controls.
+    // Keep the veil neutral even when the Cyber preset recolors interface ink.
+    gsKit_prim_sprite(gsGlobal,0,0,gsGlobal->Width,gsGlobal->Height,8,
+        GS_SETREG_RGBA(0,0,0,(int)(70*fmaxf(0,fminf(1,opacity)))));
+    apGlassPanel(148,143,344,186,opacity*.98f);
+    apLine(170,159,300,bright,"Unsaved changes");
+    for(int i=0;i<3;i++) {
+      if(s->exitChoice==i)apFocusRow(161,194+39*i,318,34,opacity);
+      apLine(179,201+39*i,280,s->exitChoice==i?bright:muted,
+          (const char *const[]){"Apply","Discard","Keep editing"}[i]);
+    }
+    ButtonPrompt prompts[]={{ICON_DPAD,lunaText("Select")},
+        {ICON_CROSS,lunaText("Confirm")},{ICON_CIRCLE,lunaText("Keep editing")}};
+    drawPromptBar((int)apX(20),(int)apY(454),(int)apX(620),(int)apY(479),7,
+        muted,(PromptBar){NULL,prompts,3});
+    return;
   }
   ButtonPrompt prompts[]={{ICON_DPAD,lunaText(s->focus==AP_FOCUS_CONTROLS?"Adjust":"Select")},
       {ICON_CROSS,lunaText(s->focus==AP_FOCUS_CONTROLS?"Change":s->focus>=AP_FOCUS_ACTIONS?"Confirm":"Open")},
       {ICON_CIRCLE,lunaText(s->focus==AP_FOCUS_CATEGORIES?"Close":"Back")},
       {ICON_SQUARE,lunaText("Apply / Discard")}};
   drawPromptBar((int)apX(20),(int)apY(454),(int)apX(620),(int)apY(479),7,muted,(PromptBar){NULL,prompts,4});
-  if(s->focus==AP_FOCUS_EXIT) {
-    apGlassPanel(148,143,344,186,opacity*.98f);
-    apLine(170,159,300,bright,"Unsaved changes");
-    for(int i=0;i<3;i++) {
-      if(s->exitChoice==i)apRect(161,194+39*i,318,34,apInk(24,83,115,opacity));
-      apLine(179,201+39*i,280,s->exitChoice==i?bright:muted,
-          (const char *const[]){"Apply","Discard","Keep editing"}[i]);
-    }
-  }
 }
 static int appearanceWorkspaceInput(void *context,int input) {
   AppearanceEditor *s=context;

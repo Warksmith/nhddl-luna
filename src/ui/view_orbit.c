@@ -166,23 +166,7 @@ void drawOrbit(TargetList *titles, int selectedTitleIdx, GSTEXTURE **covers, int
   if (selectedSize > maxSelectedSize)
     selectedSize = maxSelectedSize;
 
-  if (getLibraryBackground() == LIBRARY_BACKGROUND_ORBS) {
-#ifdef LUNA_CAMERA_ANIMATIONS
-    lunaCameraSceneBeforeBackground();
-#endif
-    const uint64_t black = GS_SETREG_RGBA(0x00, 0x00, 0x00, 0x80);
-    gsKit_prim_quad_gouraud(gsGlobal, 0, 0, gsGlobal->Width, 0,
-                            0, gsGlobal->Height, gsGlobal->Width,
-                            gsGlobal->Height, 0, black, black, black, black);
-    drawAmbientOrbsOrbit(gsGlobal->Width / 2, gsGlobal->Height / 2,
-                         gsGlobal->Width * 25 / 100,
-                         gsGlobal->Height * 35 / 100, frameNowMs, 0);
-#ifdef LUNA_CAMERA_ANIMATIONS
-    lunaCameraSceneAfterBackground();
-#endif
-  } else {
-    drawSharedLibraryBackground(frameNowMs);
-  }
+  drawOrbitLibraryBackground(frameNowMs);
   if (randomActive)
     drawTextWindow(gsGlobal->Width / 2, headerHeight - getFontLineHeight(),
                    gsGlobal->Width - keepoutArea - 8, 0, 6,

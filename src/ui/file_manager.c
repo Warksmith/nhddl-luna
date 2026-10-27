@@ -137,17 +137,30 @@ static int browserSelectorY(BrowserSelector *menu, int selected, int first, int 
   return (menu->fromY + (menu->toY - menu->fromY) * progress / 1000) / 256;
 }
 
+static void (*browserBackdrop)(void *);
+static void *browserBackdropContext;
+void uiFileManagerSetBackdrop(void (*draw)(void *), void *context) {
+  browserBackdrop=draw; browserBackdropContext=context;
+}
+
 static void drawBrowserSheetPanel(int panelLeft, int panelTop,
                                    int panelRight, int panelBottom) {
   int width = gsGlobal->Width;
   int height = gsGlobal->Height;
-  gsGlobal->PrimAlphaEnable = GS_SETTING_OFF;
-  gsKit_set_test(gsGlobal, GS_ATEST_OFF);
-  gsKit_prim_sprite(gsGlobal, 0, 0, width, height, 0,
-                    GS_SETREG_RGBA(0x04, 0x0A, 0x18, 0x80));
-  gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
-  gsKit_set_test(gsGlobal, GS_ATEST_ON);
-  drawSharedLibraryBackground(uiNowMs());
+  if (browserBackdrop) {
+    browserBackdrop(browserBackdropContext);
+    gsGlobal->PrimAlphaEnable=GS_SETTING_ON;
+    gsKit_set_primalpha(gsGlobal,GS_SETREG_ALPHA(0,1,0,1,0),0);
+    gsKit_prim_sprite(gsGlobal,0,0,width,height,0,GS_SETREG_RGBA(0,0,0,64));
+  } else {
+    gsGlobal->PrimAlphaEnable = GS_SETTING_OFF;
+    gsKit_set_test(gsGlobal, GS_ATEST_OFF);
+    gsKit_prim_sprite(gsGlobal, 0, 0, width, height, 0,
+                      GS_SETREG_RGBA(0x04, 0x0A, 0x18, 0x80));
+    gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
+    gsKit_set_test(gsGlobal, GS_ATEST_ON);
+    drawSharedLibraryBackground(uiNowMs());
+  }
   gsKit_prim_sprite(gsGlobal, 0, 0, width, height, 0,
                     glassPresetColor(0x02, 0x07, 0x16, 0x38));
   gsKit_prim_sprite(gsGlobal, panelLeft + 2, panelTop + 2,

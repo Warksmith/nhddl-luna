@@ -115,6 +115,8 @@ uint8_t getFontLineHeight();
 
 // Gets the line width for the first line in text
 float getLineWidth(const char *text);
+// Includes glyph overhang and the crisp renderer's extra atlas texel.
+float getLineDrawWidth(const char *text);
 
 // Returns icon width
 int getIconWidth(IconType iconType);

@@ -47,4 +47,9 @@ void drawOrbsView(TargetList *titles, int selectedTitleIdx,
                   int entryProgress, uint32_t now,
                   const char *nextViewLabel);
 
+void drawOrbitLibraryBackground(uint32_t nowMs);
+// A modal frame draws the live backdrop once, independently of frozen artwork.
+void beginOptionsLibraryBackground(uint32_t nowMs, int orbit);
+void endOptionsLibraryBackground(void);
+
 #endif

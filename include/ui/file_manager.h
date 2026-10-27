@@ -7,6 +7,8 @@
 int uiMainMenuLoop(int hasLibrary, Target *target);
 #include "ui/game_options.h"
 void uiVmcSetLibrary(TargetList *library);
+// Draw-only backdrop for pickers opened by another workspace; clear on return.
+void uiFileManagerSetBackdrop(void (*draw)(void *), void *context);
 int uiVmcPs2Slot(Target *target, ArgumentList *arguments, LunaGameOptions *options, int slot);
 int uiVmcPs2Policy(Target *target, ArgumentList *arguments, LunaGameOptions *options);
 const char *uiVmcCheckPs2(Target *target, ArgumentList *arguments);

@@ -662,8 +662,8 @@ void drawGlassPanelWithOpacity(int x1, int y1, int x2, int y2, int z,
     // Screen-aligned pairs stay steady across both fields of interlaced video.
     // Keep the CRT texture behind text, artwork and the existing panel rim.
     const uint64_t phosphor = glassPresetColor(0x38, 0xFF, 0x68,
-                                                0x08 * fillAlpha / 0x54);
-    for (int y = ((y1 + 9) / 6) * 6; y + 2 <= y2 - 4; y += 6)
+                                                0x06 * fillAlpha / 0x54);
+    for (int y = ((y1 + 11) / 8) * 8; y + 2 <= y2 - 4; y += 8)
       gsKit_prim_sprite(gsGlobal, x1 + 4, y, x2 - 4, y + 2, z + 1, phosphor);
   }
   gsKit_prim_sprite(gsGlobal, x1 + 4, y1 + 4, x2 - 4, y1 + 8, z + 1, glassInner);
@@ -1582,11 +1582,20 @@ static void drawBiosSystemConfiguration(uint32_t frameNowMs) {
 #include "ui/camera_transitions.h"
 #endif
 
-void drawSharedLibraryBackground(uint32_t frameNowMs) {
+static int optionsBackgroundDrawn;
+
+static void drawLibraryBackground(uint32_t frameNowMs, int orbit) {
+  if (optionsBackgroundDrawn) return;
 #ifdef LUNA_CAMERA_ANIMATIONS
   lunaCameraSceneBeforeBackground();
 #endif
-  if (libraryBackground == LIBRARY_BACKGROUND_SPACE_FLIGHT)
+  if (orbit && libraryBackground == LIBRARY_BACKGROUND_ORBS) {
+    const uint64_t black = GS_SETREG_RGBA(0,0,0,0x80);
+    gsKit_prim_quad_gouraud(gsGlobal,0,0,gsGlobal->Width,0,0,gsGlobal->Height,
+                            gsGlobal->Width,gsGlobal->Height,0,black,black,black,black);
+    drawAmbientOrbsOrbit(gsGlobal->Width/2,gsGlobal->Height/2,
+        gsGlobal->Width*25/100,gsGlobal->Height*35/100,frameNowMs,0);
+  } else if (libraryBackground == LIBRARY_BACKGROUND_SPACE_FLIGHT)
     drawSpaceFlight(frameNowMs);
   else if (libraryBackground >= LIBRARY_BACKGROUND_AURORA &&
       libraryBackground <= LIBRARY_BACKGROUND_TEMPEST)
@@ -1604,6 +1613,24 @@ void drawSharedLibraryBackground(uint32_t frameNowMs) {
 #ifdef LUNA_CAMERA_ANIMATIONS
   lunaCameraSceneAfterBackground();
 #endif
+}
+
+void drawSharedLibraryBackground(uint32_t nowMs) {
+  drawLibraryBackground(nowMs,0);
+}
+
+void drawOrbitLibraryBackground(uint32_t nowMs) {
+  drawLibraryBackground(nowMs,1);
+}
+
+void beginOptionsLibraryBackground(uint32_t nowMs, int orbit) {
+  optionsBackgroundDrawn=0;
+  drawLibraryBackground(nowMs,orbit);
+  optionsBackgroundDrawn=1;
+}
+
+void endOptionsLibraryBackground(void) {
+  optionsBackgroundDrawn=0;
 }
 
 int orbsVisualCacheIndex(int flowOffset) {

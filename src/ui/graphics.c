@@ -517,6 +517,28 @@ float getLineWidth(const char *text) {
   return lineWidth;
 }
 
+float getLineDrawWidth(const char *text) {
+  float pen = 0, extent = 0;
+  const char *cursor = text;
+  while (*cursor) {
+    uint32_t character = lunaUTF8Next(&cursor);
+    if (character == '\n') break;
+    const BMFontChar *glyph = getGlyph(character);
+    if (!glyph) continue;
+    float right = pen + glyph->xoffset + glyph->width + 1;
+    if (right > extent) extent = right;
+    pen += glyph->xadvance;
+    if (glyph->kernings && *cursor) {
+      const char *next = cursor;
+      uint32_t nextCharacter = lunaUTF8Next(&next);
+      for (int k = 0; k < glyph->kerningsCount; k++)
+        if (glyph->kernings[k].secondChar == nextCharacter)
+          pen += glyph->kernings[k].amount;
+    }
+  }
+  return extent > pen ? extent : pen;
+}
+
 // Draws the text in [x1,y1],[x2,y2] window.
 // Doesn't draw the glyphs that do not fit in the set window.
 // Returns the bottom Y coordinate of the last line that can be used to draw the next text.
