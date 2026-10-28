@@ -10,7 +10,7 @@ static int menuReturning;
 float lunaCameraDrawScale = 1.0f;
 float lunaCameraDrawOpacity = 1.0f;
 static int layerActive;
-static float layerScale=1,layerOpacity=1,layerOffsetY;
+static float layerScale=1,layerOpacity=1,layerOffsetX,layerOffsetY;
 static uint32_t lastMs, pendingTicks;
 static int initialized, wasOpen, armed, applied, savedOffsetX, savedOffsetY;
 static LunaMotion viewMotion;
@@ -220,6 +220,7 @@ void lunaCameraSceneAfterBackground(void) {
   if (layerActive) {
     lunaCameraDrawScale=layerScale;
     lunaCameraDrawOpacity=layerOpacity;
+    gsGlobal->OffsetX+=(int)lroundf(layerOffsetX*16.0f);
     gsGlobal->OffsetY+=(int)lroundf(layerOffsetY*16.0f);
   } else {
     gsGlobal->OffsetX += (int)lroundf(camera.position[0] * scale * 16.0f);
@@ -233,11 +234,12 @@ void lunaCameraSceneEnd(void) {
   armed = 0;
 }
 
-void lunaCameraLayerBegin(float scale, float opacity, float offsetY) {
+void lunaCameraLayerBegin(float scale, float opacity, float offsetX, float offsetY) {
   restoreCameraOffset();
   layerActive=1;
   layerScale=fmaxf(.01f,scale);
   layerOpacity=fminf(1,fmaxf(0,opacity));
+  layerOffsetX=offsetX;
   layerOffsetY=offsetY;
 }
 

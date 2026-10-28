@@ -6,7 +6,8 @@
 
 typedef struct {
   // Borrowed scene; ownership stays with the library.
-  void (*drawLibrary)(void *context, float offsetY);
+  // Retreat progress: 0 is the original library, 1 is fully aside.
+  void (*drawLibrary)(void *context, float progress);
   void *context;
 } LunaOptionsScene;
 

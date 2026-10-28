@@ -654,14 +654,6 @@ void drawGlassPanelWithOpacity(int x1, int y1, int x2, int y2, int z,
   const uint64_t edge = glassPresetColor(0x24, 0x68, 0x98, (int)(0x24*opacity));
 
   gsKit_prim_sprite(gsGlobal, x1, y1, x2, y2, z, glass);
-  if (glassColorPreset == GLASS_COLOR_CYBER && fillAlpha > 0) {
-    // Screen-aligned pairs stay steady across both fields of interlaced video.
-    // Keep the CRT texture behind text, artwork and the existing panel rim.
-    const uint64_t phosphor = glassPresetColor(0x38, 0xFF, 0x68,
-                                                0x06 * fillAlpha / 0x54);
-    for (int y = ((y1 + 11) / 8) * 8; y + 2 <= y2 - 4; y += 8)
-      gsKit_prim_sprite(gsGlobal, x1 + 4, y, x2 - 4, y + 2, z + 1, phosphor);
-  }
   gsKit_prim_sprite(gsGlobal, x1 + 4, y1 + 4, x2 - 4, y1 + 8, z + 1, glassInner);
   // Two matching scanlines per band keep the rim stable in interlaced output.
   gsKit_prim_sprite(gsGlobal, x1, y1, x2, y1 + 2, z + 2, rim);

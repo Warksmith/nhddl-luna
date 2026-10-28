@@ -145,6 +145,17 @@ static void prepareFontPageAlpha(GSTEXTURE *page) {
     pixels[i * 4 + 3] = 0x80 - pixels[i * 4 + 3];
 }
 
+static void prepareLunaLogoAlpha(void) {
+  // Only the brand region uses normal alpha for menu fades; controls retain
+  // their existing inverted-alpha blend and colors.
+  u8 *pixels=(u8 *)icons->Mem;
+  for(int y=LUNA_LOGO.y;y<LUNA_LOGO.y+LUNA_LOGO.height;y++)
+    for(int x=LUNA_LOGO.x;x<LUNA_LOGO.x+LUNA_LOGO.width;x++) {
+      size_t offset=((size_t)y*icons->Width+x)*4+3;
+      pixels[offset]=0x80-pixels[offset];
+    }
+}
+
 int setUIFont(UIFont selection) {
   if (selection < UI_FONT_DEJAVU || selection >= UI_FONT_COUNT)
     return -1;
@@ -207,9 +218,11 @@ int initGraphics() {
   // Upload icons texture to GS
   icons = calloc(sizeof(GSTEXTURE), 1);
   if (icons == NULL ||
-      gsKit_texture_png_mem(gsGlobal, icons, ICONS_PNG, SIZE_ICONS_PNG, 0, 1)) {
+      gsKit_texture_png_mem(gsGlobal, icons, ICONS_PNG, SIZE_ICONS_PNG, 0, 0)) {
     goto fail;
   }
+  prepareLunaLogoAlpha();
+  if(!bindTextureSafe(gsGlobal,icons))goto fail;
 
   gridSelector = calloc(sizeof(GSTEXTURE), 1);
   if (gridSelector != NULL &&
@@ -276,6 +289,31 @@ void drawIconScaled(float x, float y, int z, uint64_t color, IconType iconType, 
                             z, color);
   gsKit_set_test(gsGlobal, GS_ATEST_ON);
   gsKit_set_primalpha(gsGlobal, GS_SETREG_ALPHA(0, 1, 0, 1, 0), 0);
+}
+
+void drawLunaLogo(float centerX,float top,float width,int z,uint64_t color) {
+  if(icons==NULL||width<=0||((color>>24)&255)==0)return;
+  int filter=icons->Filter;
+  icons->Filter=GS_FILTER_LINEAR;
+  if(!bindTextureSafe(gsGlobal,icons)) {icons->Filter=filter;return;}
+  GSTEST savedTest=*gsGlobal->Test;
+  uint64_t savedBlend=gsGlobal->PrimAlpha;
+  int savedAlpha=gsGlobal->PrimAlphaEnable,savedPabe=gsGlobal->PABE;
+  gsKit_set_test(gsGlobal,GS_ATEST_OFF);
+  gsGlobal->PrimAlphaEnable=GS_SETTING_ON;
+  gsKit_set_primalpha(gsGlobal,GS_SETREG_ALPHA(0,1,0,1,0),0);
+  float left=roundf(centerX-width*.5f),y=roundf(top);
+  // Texture modulation uses 128 as neutral white; callers use standard RGB.
+  uint64_t tint=GS_SETREG_RGBA((color&255)/2,((color>>8)&255)/2,
+      ((color>>16)&255)/2,(color>>24)&255);
+  gsKit_prim_sprite_texture(gsGlobal,icons,left,y,LUNA_LOGO.x+.5f,LUNA_LOGO.y+.5f,
+      left+width,y+width*109.0f/710.0f,LUNA_LOGO.x+LUNA_LOGO.width-.5f,
+      LUNA_LOGO.y+LUNA_LOGO.height-.5f,z,tint);
+  icons->Filter=filter;
+  gsKit_set_primalpha(gsGlobal,savedBlend,savedPabe);
+  gsGlobal->PrimAlphaEnable=savedAlpha;
+  *gsGlobal->Test=savedTest;
+  gsKit_set_test(gsGlobal,savedTest.ATE?GS_ATEST_ON:GS_ATEST_OFF);
 }
 
 // Draws the icon in [x1,y1],[x2,y2] window.

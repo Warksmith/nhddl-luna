@@ -11,13 +11,11 @@ typedef struct {
   void (*adjust)(void *context, int row, int direction);
   void *context;
   const char *status;
+  const char *sectionTitle;
+  const char *subtitle;
+  const char *testLabel;
+  int stackedValues;
 } LunaCubePage;
-typedef struct {
-  void *context;
-  void (*draw)(void *context, float opacity);
-  int (*input)(void *context, int buttons);
-} LunaCubeWorkspace;
-void uiCubeWorkspaceLoop(const LunaCubeWorkspace *workspace);
 enum { LUNA_CUBE_SUBMENU_STAY, LUNA_CUBE_SUBMENU_BACK, LUNA_CUBE_SUBMENU_DONE };
 typedef struct {
   void *context;
@@ -26,6 +24,26 @@ typedef struct {
   int (*input)(void *context, int buttons);
   void (*end)(void *context);
 } LunaCubeSubmenu;
+typedef struct {
+  const char *title;
+  const char *const *labels;
+  int count;
+  const LunaCubeSubmenu *submenus;
+  int submenuCount;
+  int confirmRow; // -1 when no category needs a confirmation press.
+  const char *confirmText;
+  void *context;
+  const char *(*description)(void *context, int row);
+  const char *subtitle;
+  const char *testLabel;
+  // Optional live scene. Return nonzero once the closing scene is restored.
+  int (*background)(void *context, int closing);
+  int (*input)(void *context, int buttons);
+} LunaCubeHub;
+// One crystal per row, up to six. Returns the chosen row, or -1 for Back.
+int uiCubeHubLoop(int *selected, const char *status, const LunaCubeHub *hub);
+// Redraw the active hub or page beneath a blocking picker, without presenting.
+void uiCubeHubDrawBackdrop(void);
 typedef struct {
   int selected,first,fromY,toY;
   unsigned int startMs;

@@ -1,4 +1,4 @@
-/* Settings menu with authored crystal rendering and selection effects. */
+/* Shared category menus with authored crystal rendering and portal effects. */
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -137,16 +137,31 @@ static void cubeStep(CubeMenu *m,uint32_t now) {
 #include <dmaKit.h>
 #include <unistd.h>
 #include "cube_draw.inc"
-int uiCubeSettingsLoop(int *selected, const char *status,
-                       const LunaCubeSubmenu submenus[4]) {
+static CubeMenu *activeCubeMenu;
+static const LunaCubeHub *activeCubeHub;
+static const LunaCubeSubmenu *activeCubeSubmenu;
+static const char *activeCubeStatus;
+static int activeCubeConfirm;
+
+void uiCubeHubDrawBackdrop(void) {
+  if(activeCubeMenu)cubeDraw(activeCubeMenu,activeCubeStatus,activeCubeConfirm,
+                             activeCubeHub,activeCubeSubmenu);
+}
+
+static void cubeHubClose(void) {
+  activeCubeMenu=NULL;activeCubeHub=NULL;activeCubeSubmenu=NULL;
+  cubeMaterialClose();
+}
+
+int uiCubeHubLoop(int *selected,const char *status,const LunaCubeHub *hub) {
   static CubeMenu menu;
-  static const int actions[]={LUNA_CUBE_VMC,LUNA_CUBE_STORAGE,LUNA_CUBE_LANGUAGE,
-                              LUNA_CUBE_DEFAULTS,LUNA_CUBE_EXIT,LUNA_CUBE_SHUTDOWN};
+  if(!hub||!hub->labels||hub->count<1||hub->count>CUBE_COUNT)return -1;
   int initial=*selected;
-  if(initial<0||initial>=CUBE_ITEMS)initial=0;
+  if(initial<0||initial>=hub->count)initial=0;
   cubeInit(&menu,uiNowMs(),initial,gsGlobal->Mode==GS_MODE_PAL?50:60);
+  menu.itemCount=hub->count;*selected=initial;
   cubeMaterialInit();
-  int previous=pollInput(),destination=LUNA_CUBE_BACK,confirmShutdown=0;
+  int previous=pollInput(),destination=-1,confirm=0;
   const LunaCubeSubmenu *submenu=NULL;
   for(;;) {
     int wasSubmenuOpen=menu.submenuOpen;
@@ -155,7 +170,10 @@ int uiCubeSettingsLoop(int *selected, const char *status,
       if(submenu->end)submenu->end(submenu->context);
       submenu=NULL;
     }
-    cubeDraw(&menu,status,confirmShutdown,NULL,submenu);
+    activeCubeMenu=&menu;activeCubeHub=hub;activeCubeSubmenu=submenu;
+    activeCubeStatus=status;activeCubeConfirm=confirm;
+    int sceneReady=cubeDraw(&menu,status,confirm,hub,submenu);
+    gsKit_queue_exec(gsGlobal);gsKit_finish();gsKit_sync_flip(gsGlobal);usleep(1000);
     int held=pollInput(),input=held&~previous;previous=held;
     if(menu.submenuOpen) {
       if(menu.submenuDirection)continue;
@@ -166,44 +184,48 @@ int uiCubeSettingsLoop(int *selected, const char *status,
       if(result==LUNA_CUBE_SUBMENU_BACK)menu.submenuDirection=-1;
       else if(result==LUNA_CUBE_SUBMENU_DONE) {
         if(submenu->end)submenu->end(submenu->context);
-        cubeMaterialClose();return actions[menu.selected];
+        cubeHubClose();return menu.selected;
       }
       continue;
     }
     if(menu.closing) {
-      if(menu.exit>=(menu.entering?1440:500)) {cubeMaterialClose();return destination;}
+      if(menu.exit>=(menu.entering?1440:500)&&sceneReady) {cubeHubClose();return destination;}
       continue;
     }
-    if(confirmShutdown) {
-      if(input&(PAD_CIRCLE|PAD_TRIANGLE|PAD_START))confirmShutdown=0;
-      else if(input&PAD_CROSS) {destination=LUNA_CUBE_SHUTDOWN;cubeClose(&menu,1);}
+    if(hub->input) {
+      int result=hub->input(hub->context,input);
+      if(input)previous=pollInput();
+      if(result==LUNA_CUBE_SUBMENU_DONE) {cubeHubClose();return menu.selected;}
+    }
+    if(confirm) {
+      if(input&(PAD_CIRCLE|PAD_TRIANGLE|PAD_START))confirm=0;
+      else if(input&PAD_CROSS) {destination=menu.selected;cubeClose(&menu,1);}
     } else if(input&(PAD_CIRCLE|PAD_TRIANGLE|PAD_START)) {
-      destination=LUNA_CUBE_BACK;cubeClose(&menu,0);
+      destination=-1;cubeClose(&menu,0);
     } else if(input&(PAD_UP|PAD_LEFT|PAD_L1))cubeMove(&menu,-1);
     else if(input&(PAD_DOWN|PAD_RIGHT|PAD_R1))cubeMove(&menu,1);
     else if(input&PAD_CROSS) {
-      if(actions[menu.selected]==LUNA_CUBE_SHUTDOWN)confirmShutdown=1;
-      else if(menu.selected<4&&submenus&&submenus[menu.selected].draw&&
-              submenus[menu.selected].input) {
-        submenu=&submenus[menu.selected];
+      if(menu.selected==hub->confirmRow)confirm=1;
+      else if(menu.selected<hub->submenuCount&&hub->submenus&&
+              hub->submenus[menu.selected].draw&&hub->submenus[menu.selected].input) {
+        submenu=&hub->submenus[menu.selected];
         if(submenu->begin)submenu->begin(submenu->context);
         menu.submenuOpen=1;menu.submenuDirection=1;menu.submenuAge=0;
       }
-      else {destination=actions[menu.selected];cubeClose(&menu,1);}
+      else {destination=menu.selected;cubeClose(&menu,1);}
     }
     *selected=menu.selected;
   }
 }
 
-void uiCubeWorkspaceLoop(const LunaCubeWorkspace *workspace) {
-  static CubeMenu menu;
-  cubeInit(&menu,uiNowMs(),0,gsGlobal->Mode==GS_MODE_PAL?50:60);
-  int previous=pollInput();
-  for(;;) {
-    cubeStep(&menu,uiNowMs());cubeDraw(&menu,NULL,0,workspace,NULL);
-    int held=pollInput(),input=held&~previous;previous=held;
-    if(menu.closing) {
-      if(menu.exit>=500)return;
-    } else if(workspace->input(workspace->context,input))cubeClose(&menu,0);
-  }
+int uiCubeSettingsLoop(int *selected,const char *status,
+                       const LunaCubeSubmenu submenus[4]) {
+  static const char *const labels[]={"Virtual Memory Cards","Storage Devices",
+    "Language","Game Defaults","Exit LUNA","Shutdown"};
+  static const int actions[]={LUNA_CUBE_VMC,LUNA_CUBE_STORAGE,LUNA_CUBE_LANGUAGE,
+                              LUNA_CUBE_DEFAULTS,LUNA_CUBE_EXIT,LUNA_CUBE_SHUTDOWN};
+  const LunaCubeHub hub={.title="System Configuration",.labels=labels,.count=CUBE_ITEMS,
+    .submenus=submenus,.submenuCount=4,.confirmRow=5,.confirmText="Power off the console?"};
+  int row=uiCubeHubLoop(selected,status,&hub);
+  return row<0?LUNA_CUBE_BACK:actions[row];
 }

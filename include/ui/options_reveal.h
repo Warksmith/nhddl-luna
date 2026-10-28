@@ -6,7 +6,7 @@
 #ifdef LUNA_CAMERA_ANIMATIONS
 #include "ui/luna_motion.h"
 #endif
-/* Move the library down with the R1 camera's motion while Options fade in.
+/* Retreat the library with the R1 camera's motion while Options appear.
  * Closing reverses the library motion from its current pose. */
 #define LUNA_OPTIONS_PAN_MS 750U
 typedef struct {

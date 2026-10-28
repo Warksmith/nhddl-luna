@@ -90,7 +90,7 @@ static void ringDraw(RingMenu *menu,int hasLibrary,const char *status) {
   ringOpacity=1;
   gsKit_prim_sprite(gsGlobal,0,0,gsGlobal->Width,gsGlobal->Height,1,ringColor(0,2,18,75));
   /* Modest branding rather than the previous dashboard heading/cards. */
-  ringText(320,15,78,17,ringColor(179,198,216,128),"LUNA");
+  drawLunaLogo(ringSX(320),ringSY(15),ringSX(78),4,ringColor(179,198,216,128));
   if(status) ringText(320,43,400,18,ringColor(215,229,244,128),status);
   float ringAlpha=ringClamp(menu->entry/1000)*(1-ringClamp((menu->exit-1000)/1000));
   RingVec center=ringTransform(0,0,0,menu,1);

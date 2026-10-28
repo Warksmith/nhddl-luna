@@ -14,6 +14,7 @@
 #include "storage.h"
 #include "cheat_storage.h"
 #include "ui/options_reveal.h"
+#include "ui/cube_menu.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -56,6 +57,10 @@ typedef struct {
 
 
 typedef struct {
+  char label[160], value[160], description[320];
+} OptionsWorkspaceRow;
+
+typedef struct {
   Target *target;
   ArgumentList *titleArguments;
   LunaGameOptions gameOptions;
@@ -91,6 +96,10 @@ typedef struct {
   uint32_t savedAt;
   const LunaOptionsScene *scene;
   LunaOptionsReveal transition;
+  LunaCubePageFocus pageFocus;
+  OptionsWorkspaceRow workspaceRow;
+  char workspaceHelp[320];
+  int result;
 } OptionsMenuState;
 
 static int uiArgumentListLoop(OptionsMenuState *state);
@@ -230,38 +239,6 @@ static void drawOptionsFooter(int gamePage, int argumentList, int placeholder, c
   drawPromptBar(3 * slot, top, width - 8, gsGlobal->Height, 0,
                 HeaderTextColor, (PromptBar){NULL, back, 1});
 }
-
-static int optionsSelectorProgress(const OptionsSelector *selector, uint32_t now) {
-  uint32_t elapsed = now - selector->startMs;
-  if (elapsed >= OPTIONS_SELECTOR_GLIDE_DURATION_MS)
-    return 1000;
-  int progress = (int)(elapsed * 1000ULL / OPTIONS_SELECTOR_GLIDE_DURATION_MS);
-  return (int)((int64_t)progress * progress * (3000 - 2 * progress) / 1000000);
-}
-
-static int optionsSelectorY(OptionsSelector *selector, OptionsPage page,
-                            int selectedRow, int selectedY) {
-  const uint32_t now = uiNowMs();
-  if (!selector->initialized || selector->page != page) {
-    selector->page = page;
-    selector->selectedRow = selectedRow;
-    selector->fromRow = selectedY * OPTIONS_SELECTOR_ROW_SCALE;
-    selector->toRow = selector->fromRow;
-    selector->startMs = now;
-    selector->initialized = 1;
-  } else if (selector->selectedRow != selectedRow) {
-    int progress = optionsSelectorProgress(selector, now);
-    selector->fromRow += (selector->toRow - selector->fromRow) * progress / 1000;
-    selector->toRow = selectedY * OPTIONS_SELECTOR_ROW_SCALE;
-    selector->selectedRow = selectedRow;
-    selector->startMs = now;
-  }
-  int progress = optionsSelectorProgress(selector, now);
-  int row = selector->fromRow +
-            (selector->toRow - selector->fromRow) * progress / 1000;
-  return row / OPTIONS_SELECTOR_ROW_SCALE;
-}
-
 
 static void drawOptionsTextRow(int x, int y, int right, int selected,
                                int selectorY, const char *label,
@@ -796,45 +773,21 @@ int uiTitleOptionsLoop(Target *target, const LunaOptionsScene *scene) {
     state.saveError = 1;
     state.saveErrorLabel = lunaText("Could not read cheat settings. Change a cheat option to reset.");
   }
-  int input = 0;
   uiFileManagerSetBackdrop(optionsWorkspaceBackdrop,&state);
-
   lunaOptionsRevealStart(&state.transition,1,uiNowMs());
-  int transitionDone, previousTransitionButtons=pollInput();
-  do {
-    transitionDone=lunaOptionsRevealTick(&state.transition,uiNowMs());
-    drawTitleOptionsFrame(&state,0,1);
-    int buttons=pollInput();
-    if ((buttons & ~previousTransitionButtons) & PAD_TRIANGLE) goto exit;
-    previousTransitionButtons=buttons;
-  } while (!transitionDone);
-  while (pollInput() & (PAD_CROSS | PAD_CIRCLE | PAD_TRIANGLE | PAD_SQUARE | PAD_START))
-    drawTitleOptionsFrame(&state, 0, 0);
-
-  const int actionButtons=PAD_CROSS|PAD_CIRCLE|PAD_TRIANGLE|PAD_SQUARE|PAD_START|PAD_L1|PAD_R1;
-  int heldActions=pollInput()&actionButtons;
-  while (1) {
-    drawTitleOptionsFrame(&state, 0, 0);
-
-    // Process user inputs
-    input = readInput();
-    input &= ~heldActions;
-    heldActions=pollInput()&actionButtons;
-    int action = optionsWorkspaceInput(&state, input);
-    // A picker may return with its confirmation button still held.
-    heldActions |= pollInput()&actionButtons;
-    if (action != 0) {
-      res = action == STORAGE_UI_REFRESH ? action : action < 0 ? -1 : 0;
-      goto exit;
-    }
-  }
-exit:
-  if (res >= 0) {
+  optionsCubeLoop(&state);
+  res=state.result;
+  // Storage refreshes may end a page directly; finish restoring its library.
+  if(res>=0 && state.transition.position>0) {
     lunaOptionsRevealStart(&state.transition,0,uiNowMs());
+    int done;
     do {
-      transitionDone=lunaOptionsRevealTick(&state.transition,uiNowMs());
-      drawTitleOptionsFrame(&state,0,2);
-    } while (!transitionDone);
+      gsKit_clear(gsGlobal,BGColor);gsKit_TexManager_nextFrame(gsGlobal);
+      gsKit_set_test(gsGlobal,GS_ZTEST_OFF);
+      done=optionsCubeBackground(&state,1);
+      gsKit_set_test(gsGlobal,GS_ZTEST_ON);
+      presentOptionsFrame();
+    } while(!done);
   }
   uiFileManagerSetBackdrop(NULL,NULL);
   freeArgumentList(state.titleArguments);
@@ -854,7 +807,7 @@ static int uiArgumentListLoop(OptionsMenuState *state) {
   Argument *curArgument = titleArguments->first;
   while (1) {
     gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
-    drawOptionsWorkspaceContents(state,0,0);
+    uiCubeHubDrawBackdrop();
     gsKit_set_test(gsGlobal,GS_ZTEST_OFF);
     gsKit_prim_sprite(gsGlobal,0,0,gsGlobal->Width,gsGlobal->Height,11,GS_SETREG_RGBA(0,0,0,64));
     drawGlassPanelWithFillAlpha(30,48,gsGlobal->Width-30,gsGlobal->Height-footerHeight,12,0x7c);

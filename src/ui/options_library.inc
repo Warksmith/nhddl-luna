@@ -1,4 +1,5 @@
 /* Artwork poses stay captured; the wallpaper always uses the live clock. */
+#include <math.h>
 typedef struct {
   UILibraryView view;
   TargetList *titles;
@@ -11,17 +12,19 @@ typedef struct {
   const char *nextLabel;
 } OptionsLibrarySnapshot;
 
-static void drawOptionsLibraryScene(void *context, float offsetY) {
+static void drawOptionsLibraryScene(void *context, float progress) {
   OptionsLibrarySnapshot *s=context;
+  float pose=fminf(1,fmaxf(0,progress));
+  float offsetX=-pose*gsGlobal->Width;
 #ifdef LUNA_CAMERA_ANIMATIONS
-  lunaCameraLayerBegin(1,1,offsetY);
+  lunaCameraLayerBegin(1-.22f*pose,1,offsetX,0);
 #endif
   beginOptionsLibraryBackground(uiNowMs(),s->view==UI_VIEW_ORBIT);
   // The library moves out intact; it does not crossfade with the workspace.
-  if (offsetY<gsGlobal->Height) {
+  if (pose<1) {
 #ifndef LUNA_CAMERA_ANIMATIONS
-  int savedOffsetY=gsGlobal->OffsetY;
-  gsGlobal->OffsetY+=(int)lroundf(offsetY*16.0f);
+  int savedOffsetX=gsGlobal->OffsetX;
+  gsGlobal->OffsetX+=(int)lroundf(offsetX*16.0f);
 #endif
   switch (s->view) {
     case UI_VIEW_3D:
@@ -38,7 +41,7 @@ static void drawOptionsLibraryScene(void *context, float offsetY) {
           s->flags,s->favorites,s->coverPending,s->listEntry,s->now,s->nextLabel); break;
   }
 #ifndef LUNA_CAMERA_ANIMATIONS
-  gsGlobal->OffsetY=savedOffsetY;
+  gsGlobal->OffsetX=savedOffsetX;
 #endif
   }
   endOptionsLibraryBackground();

@@ -1,44 +1,4 @@
-/* Game identity and categories remain visible while a section is edited. */
-typedef struct {
-  char label[160], value[160], description[320];
-} OptionsWorkspaceRow;
-
-static float optionsWorkspaceOpacity = 1;
-static int owX(int x) { return (int)lroundf(x * gsGlobal->Width / 640.0f); }
-static int owY(int y) { return (int)lroundf(y * gsGlobal->Height / 448.0f); }
-static uint64_t owInk(int r, int g, int b, float alpha) {
-  int a = (int)(128 * optionsWorkspaceOpacity * alpha);
-  if (getGlassColorPreset() == GLASS_COLOR_CYBER)
-    return glassPresetColor(r,g,b,a);
-  if (getGlassColorPreset() == GLASS_COLOR_BLACK) {
-    int v = r > g ? r : g; if (b > v) v = b;
-    return GS_SETREG_RGBA(v,v,v,a);
-  }
-  return GS_SETREG_RGBA(r,g,b,a);
-}
-static void owRect(int x, int y, int right, int bottom, uint64_t ink) {
-  gsKit_prim_sprite(gsGlobal,x,y,right,bottom,8,ink);
-}
-static void owLine(int x, int y, int right, const char *text, uint64_t ink) {
-  text=text ? text : "";
-  float width=getLineDrawWidth(text),scale=width>right-x ? fmaxf(.85f,(right-x)/width) : 1;
-  drawTextLineScaledCrisp(x,y,right,10,scale,ink,text);
-}
-static void owPanel(int x, int y, int right, int bottom, int focused) {
-  drawGlassPanelWithOpacity(x,y,right,bottom,5,104,optionsWorkspaceOpacity);
-  if (!focused) return;
-  uint64_t glow=owInk(95,220,255,.16f), edge=owInk(95,220,255,.85f);
-  owRect(x-2,y-2,right+2,y,glow); owRect(x-2,bottom,right+2,bottom+2,glow);
-  owRect(x-2,y,x,bottom,glow); owRect(right,y,right+2,bottom,glow);
-  owRect(x,y,right,y+2,edge); owRect(x,bottom-2,right,bottom,edge);
-  owRect(x,y+2,x+2,bottom-2,edge); owRect(right-2,y+2,right,bottom-2,edge);
-}
-static void owFocus(int x, int y, int right, int height) {
-  owRect(x,y,right,y+height,owInk(24,83,115,.8f));
-  owRect(x,y,x+3,y+height,owInk(170,239,255,1));
-  owRect(x+3,y,right,y+2,owInk(95,220,255,.42f));
-  owRect(x+3,y+height-2,right,y+height,owInk(95,220,255,.25f));
-}
+/* Game categories use the same crystal hub and pages as Settings. */
 static int owCategoryCount(const OptionsMenuState *s) {
   return s->target->platform == TARGET_PS1 ? 4 : GAME_SECTION_COUNT;
 }
@@ -51,9 +11,6 @@ static const char *owSectionLabel(GameSection section) {
   if (section == GAME_VIDEO_OUT) return lunaText("Video out");
   if (section == GAME_DISCS) return lunaText("Discs");
   return lunaText(gameSectionLabels[section]);
-}
-static GameSection owCurrentSection(const OptionsMenuState *s) {
-  return s->gameSection == GAME_HUB ? owCategorySection(s,s->selectedGameHubRow) : s->gameSection;
 }
 static int owRowCount(const OptionsMenuState *s, GameSection section) {
   if (s->target->platform == TARGET_PS1)
@@ -156,142 +113,153 @@ static void owSummary(OptionsMenuState *s, GameSection section, char *out, size_
     snprintf(out,size,"%s",lunaGameOptionsValue(&s->gameOptions,option));
   }
 }
-static void drawOptionsWorkspaceContents(OptionsMenuState *s, int transitionProgress, int transitionMode) {
-  (void)transitionProgress;
-  if (!transitionMode) lunaOptionsRevealTick(&s->transition,uiNowMs());
-  float open=s->transition.opacity;
-  float shade=s->transition.shade;
-  float position=s->transition.position;
-  gsKit_clear(gsGlobal,BGColor); gsKit_TexManager_nextFrame(gsGlobal);
-  gsKit_set_test(gsGlobal,GS_ZTEST_OFF);
-  if (s->scene && s->scene->drawLibrary)
-    s->scene->drawLibrary(s->scene->context,position*gsGlobal->Height);
+
+static int optionsCubeBackground(void *context,int closing) {
+  OptionsMenuState *s=context;
+  if(closing && s->transition.opening)
+    lunaOptionsRevealStart(&s->transition,0,uiNowMs());
+  int done=lunaOptionsRevealTick(&s->transition,uiNowMs());
+  if(s->scene && s->scene->drawLibrary)
+    s->scene->drawLibrary(s->scene->context,s->transition.position);
   else drawSharedLibraryBackground(uiNowMs());
-  gsKit_set_test(gsGlobal,GS_ZTEST_OFF); gsGlobal->PrimAlphaEnable=GS_SETTING_ON;
+  gsKit_set_test(gsGlobal,GS_ZTEST_OFF);
+  gsGlobal->PrimAlphaEnable=GS_SETTING_ON;
   gsKit_set_primalpha(gsGlobal,GS_SETREG_ALPHA(0,1,0,1,0),0);
   gsKit_set_test(gsGlobal,GS_ATEST_OFF);
-  owRect(0,0,gsGlobal->Width,gsGlobal->Height,GS_SETREG_RGBA(0,0,0,(int)(128*shade)));
-  optionsWorkspaceOpacity=open;
-  int left=owX(24),right=owX(616),split=owX(208),detail=owX(222);
-  int line=getFontLineHeight(),top=owY(116);
-  int helpTop=gsGlobal->Height-footerHeight-2*line-12,bottom=helpTop-10;
-  uint64_t bright=owInk(235,247,255,1),muted=owInk(156,181,205,1),accent=owInk(95,220,255,1);
-  owPanel(left,owY(16),right,owY(104),0);
-  int titleX=left+14;
-  owLine(titleX,owY(25),right-12,lunaText("Game settings"),muted);
-  owLine(titleX,owY(49),right-12,s->target->name,bright);
-  char identity[192];
-  snprintf(identity,sizeof(identity),"%s  /  %s  /  %s",s->target->platform==TARGET_PS1 ? "PlayStation" : "PlayStation 2",
-      s->target->id ? s->target->id : "",s->target->platform==TARGET_PS1 ? "PSXCore" : gameUsesOpl(s) ? "OPL" : "Neutrino");
-  owLine(titleX,owY(76),right-12,identity,muted);
-  int editing=s->gameSection!=GAME_HUB,count=owCategoryCount(s);
-  owPanel(left,top,split,bottom,!editing);
-  owPanel(detail,top,right,bottom,editing);
-  int catStep=(bottom-top-24)/count;
-  if (catStep>line+14) catStep=line+14;
-  for (int i=0;i<count;i++) {
-    int y=top+12+i*catStep,active=i==s->selectedGameHubRow;
-    if (active) {
-      if (!editing) owFocus(left+8,y-3,split-8,catStep-2);
-      else {
-        owRect(left+8,y-3,split-8,y+catStep-5,owInk(29,76,107,.28f));
-        owRect(left+8,y-3,left+11,y+catStep-5,owInk(95,220,255,.35f));
-      }
-    }
-    owLine(left+18,y,split-12,owSectionLabel(owCategorySection(s,i)),active ? bright : muted);
-  }
-  GameSection section=owCurrentSection(s);
-  char summary[160]; owSummary(s,section,summary,sizeof(summary));
-  owLine(detail+14,top+10,right-14,owSectionLabel(section),editing ? accent : bright);
-  int rowsTop=top+line+14;
-  owLine(detail+14,rowsTop,right-14,summary,muted);
-  rowsTop+=line+12;
-  int rowCount=owRowCount(s,section);
-  int selected=editing ? s->selectedGameRow : s->workspaceRows[section];
-  if (selected<0 || selected>=rowCount) selected=0;
-  if (editing) s->selectedGameRow=selected;
-  int stacked=section==GAME_MEMORY_CARDS || section==GAME_CORE;
-  int step=stacked ? 2*line+10 : line+12,visible=(bottom-rowsTop-8)/step;
-  if (visible<1) visible=1;
-  int first=s->workspaceFirstRow;
-  if (selected<first) first=selected;
-  if (selected>=first+visible) first=selected-visible+1;
-  if (first<0) first=0;
-  s->workspaceFirstRow=first;
-  if (s->selector.initialized && first!=s->cheatFirstRow) s->selector.initialized=0;
-  s->cheatFirstRow=first;
-  int selectorY=optionsSelectorY(&s->selector,s->page,section*10000+selected,
-      rowsTop+(selected-first)*step);
-  for (int i=first;i<rowCount && i<first+visible;i++) {
-    OptionsWorkspaceRow row; owDescribeRow(s,section,i,&row);
-    int y=rowsTop+(i-first)*step,rowRight=right-14-(rowCount>visible ? 12 : 0);
-    if (editing && i==selected) owFocus(detail+8,selectorY-3,rowRight,step-3);
-    int valueWidth=row.value[0] ? (int)ceilf(getLineDrawWidth(row.value)) : 0;
-    int maxValue=stacked ? rowRight-detail-30 : (rowRight-detail-30)*45/100;
-    if (valueWidth>maxValue) valueWidth=maxValue;
-    int valueLeft=rowRight-valueWidth-6;
-    owLine(detail+17,y,row.value[0] && !stacked ? valueLeft-10 : rowRight-6,row.label,
-        editing && i==selected ? bright : muted);
-    if (row.value[0]) owLine(stacked ? detail+25 : valueLeft,stacked ? y+line+2 : y,rowRight-6,row.value,
-        editing && i==selected ? accent : muted);
-  }
-  if (rowCount>visible && open>=1) drawListScrollbar(right-17,rowsTop,bottom-8,rowCount,first,visible,11);
-  OptionsWorkspaceRow selectedRow; owDescribeRow(s,section,selected,&selectedRow);
-  const char *help=s->saveError ? (s->saveErrorLabel ? s->saveErrorLabel : "Could not save game settings") :
-      s->vmcStatus[0] ? s->vmcStatus : selectedRow.description;
-  if (!editing && section==GAME_CHEATS) help="Select individual codes from CHT/<title ID>.cht on this drive.";
-  drawTextWindow(left+8,helpTop,right-8,gsGlobal->Height-footerHeight-4,10,
-      s->saveError ? ErrorTextColor : muted,ALIGN_LEFT,lunaText(help));
-  if (!s->saveError && s->savedAt && uiNowMs()-s->savedAt<1800)
-    owLine(right-owX(86),owY(25),right-12,lunaText("Saved"),accent);
-  const char *action=!editing ? "Open" : section==GAME_VIDEO_OUT ? "Select" :
-      section==GAME_COMPATIBILITY || (s->target->platform==TARGET_PS1 && section==GAME_VIDEO) ? "Toggle" : "Change";
-#ifdef LUNA_ENABLE_PSXCORE
-  if (editing && section==GAME_MEMORY_CARDS && s->target->platform==TARGET_PS1 && !s->ps1CardsReady) action="Retry";
-#endif
-  ButtonPrompt prompts[]={{ICON_DPAD,lunaText("Select")},{ICON_CROSS,lunaText(action)},
-      {ICON_SQUARE,lunaText(s->target->platform==TARGET_PS1 ? "Launch" : "Test")},
-      {ICON_TRIANGLE,lunaText(editing ? "Back" : "Close")}};
-  if (open>=.999f)
-    drawPromptBar(left,gsGlobal->Height-footerHeight,right,gsGlobal->Height,12,muted,(PromptBar){NULL,prompts,4});
-  optionsWorkspaceOpacity=1;
-  gsKit_set_test(gsGlobal,GS_ZTEST_ON);
-}
-
-static void drawTitleOptionsFrame(OptionsMenuState *s, int progress, int mode) {
-  drawOptionsWorkspaceContents(s,progress,mode);
-  presentOptionsFrame();
+  gsKit_prim_sprite(gsGlobal,0,0,gsGlobal->Width,gsGlobal->Height,1,
+      GS_SETREG_RGBA(0,0,0,(int)(128*s->transition.shade)));
+  return closing && done;
 }
 
 static void optionsWorkspaceBackdrop(void *context) {
-  drawOptionsWorkspaceContents(context,0,0);
+  (void)context;
+  uiCubeHubDrawBackdrop();
   gsKit_set_test(gsGlobal,GS_ZTEST_OFF);
 }
 
-static int optionsWorkspaceInput(OptionsMenuState *s, int input) {
-  GameSection before=s->gameSection;
-  if (before!=GAME_HUB) s->workspaceRows[before]=s->selectedGameRow;
-  if (input & (PAD_L1|PAD_R1)) {
-    int delta=(input&PAD_L1) ? -1 : 1,count=owCategoryCount(s);
-    s->selectedGameHubRow=(s->selectedGameHubRow+count+delta)%count;
-    s->gameSection=GAME_HUB; s->workspaceFirstRow=0; s->selector.initialized=0;
-    s->vmcStatus[0]=0;
-    return 0;
-  }
-  if (before==GAME_HUB) {
-    if (input & PAD_LEFT) return 0;
-    if (input & (PAD_CROSS|PAD_CIRCLE|PAD_RIGHT)) {
-      GameSection section=owCategorySection(s,s->selectedGameHubRow);
-      if (section==GAME_CORE) { s->gameSection=section; s->vmcStatus[0]=0; }
-      else handleGameInput(s,PAD_CROSS);
-      s->selectedGameRow=s->workspaceRows[section];
-      s->workspaceFirstRow=0; s->selector.initialized=0;
-      return 0;
-    }
-  }
+static const char *optionsCubeDescription(void *context,int row) {
+  OptionsMenuState *s=context;
+  if(s->saveError)return s->saveErrorLabel?s->saveErrorLabel:"Could not save game settings";
+  owSummary(s,owCategorySection(s,row),s->workspaceHelp,sizeof(s->workspaceHelp));
+  return s->workspaceHelp;
+}
+
+static const char *optionsCubeLabel(void *context,int row) {
+  OptionsMenuState *s=context;
+  owDescribeRow(s,s->gameSection,row,&s->workspaceRow);
+  return s->workspaceRow.label;
+}
+
+static const char *optionsCubeValue(void *context,int row) {
+  OptionsMenuState *s=context;
+  owDescribeRow(s,s->gameSection,row,&s->workspaceRow);
+  return s->workspaceRow.value;
+}
+
+static const char *optionsCubeRowDescription(void *context,int row) {
+  OptionsMenuState *s=context;
+  if(s->saveError)return s->saveErrorLabel?s->saveErrorLabel:"Could not save game settings";
+  if(s->vmcStatus[0])return s->vmcStatus;
+  owDescribeRow(s,s->gameSection,row,&s->workspaceRow);
+  return s->workspaceRow.description;
+}
+
+static int optionsCubeAction(OptionsMenuState *s,int input) {
   int result=handleGameInput(s,input);
-  if (s->gameSection!=before || s->gameSection==GAME_HUB) {
-    s->workspaceFirstRow=0; s->selector.initialized=0;
+  if(result) {
+    s->result=result==STORAGE_UI_REFRESH?result:result<0?-1:0;
+    return LUNA_CUBE_SUBMENU_DONE;
   }
+  return LUNA_CUBE_SUBMENU_STAY;
+}
+
+static void optionsCubeAdjust(void *context,int row,int direction) {
+  OptionsMenuState *s=context;
+  s->selectedGameRow=row;
+  optionsCubeAction(s,direction<0?PAD_LEFT:PAD_RIGHT);
+}
+
+typedef struct { OptionsMenuState *state; int row; } OptionsCubeCategory;
+
+static void optionsCubeBegin(void *context) {
+  OptionsCubeCategory *category=context;
+  OptionsMenuState *s=category->state;
+  s->selectedGameHubRow=category->row;
+  s->gameSection=owCategorySection(s,category->row);
+  s->selectedGameRow=s->workspaceRows[s->gameSection];
+  s->vmcStatus[0]=0;
+  if(s->gameSection==GAME_CHEATS)reloadGameCheats(s,0);
+#ifdef LUNA_ENABLE_PSXCORE
+  if(s->target->platform==TARGET_PS1 && s->gameSection==GAME_MEMORY_CARDS && !s->ps1CardsReady)
+    loadPs1Cards(s);
+#endif
+  s->pageFocus=(LunaCubePageFocus){.selected=-1,.glideMs=110};
+}
+
+static void optionsCubeDraw(void *context,float opacity) {
+  OptionsMenuState *s=((OptionsCubeCategory *)context)->state;
+  int count=owRowCount(s,s->gameSection);
+  if(s->selectedGameRow<0 || s->selectedGameRow>=count)s->selectedGameRow=0;
+  char title[96];
+  snprintf(title,sizeof(title),"%s%s%s",owSectionLabel(s->gameSection),
+      s->gameSection==GAME_VIDEO_OUT?" / ":"",
+      s->gameSection==GAME_VIDEO_OUT?(s->videoOutOpl?"OPL":"Neutrino"):"");
+  LunaCubePage page={.title=title,.count=count,.label=optionsCubeLabel,
+    .value=optionsCubeValue,.description=optionsCubeRowDescription,
+    .adjust=optionsCubeAdjust,.context=s,.sectionTitle="Game Options",
+    .subtitle=s->target->name,.testLabel=s->target->platform==TARGET_PS1?"Launch":"Test",
+    .stackedValues=s->gameSection==GAME_MEMORY_CARDS || s->gameSection==GAME_CORE};
+  uiCubeSubmenuPageDraw(&page,s->selectedGameRow,&s->pageFocus,opacity);
+  if(!s->saveError && s->savedAt && uiNowMs()-s->savedAt<1800U)
+    drawTextWindow(gsGlobal->Width*525/640,gsGlobal->Height*22/480,
+        gsGlobal->Width*608/640,gsGlobal->Height*50/480,7,
+        GS_SETREG_RGBA(235,247,255,(int)(128*opacity)),ALIGN_RIGHT,lunaText("Saved"));
+}
+
+static int optionsCubeInput(void *context,int input) {
+  OptionsMenuState *s=((OptionsCubeCategory *)context)->state;
+  if(input&(PAD_TRIANGLE|PAD_CIRCLE|PAD_START)) {
+    if(s->gameSection!=GAME_VIDEO_OUT)return LUNA_CUBE_SUBMENU_BACK;
+    s->workspaceRows[GAME_VIDEO_OUT]=s->selectedGameRow;
+    s->gameSection=GAME_VIDEO;
+    s->selectedGameRow=s->workspaceRows[GAME_VIDEO];
+    s->pageFocus.selected=-1;
+    return LUNA_CUBE_SUBMENU_STAY;
+  }
+  if(input&PAD_L1)input=(input&~PAD_L1)|PAD_UP;
+  if(input&PAD_R1)input=(input&~PAD_R1)|PAD_DOWN;
+  GameSection before=s->gameSection;
+  s->workspaceRows[before]=s->selectedGameRow;
+  int result=optionsCubeAction(s,input);
+  if(before!=s->gameSection)s->pageFocus.selected=-1;
   return result;
+}
+
+static void optionsCubeEnd(void *context) {
+  OptionsMenuState *s=((OptionsCubeCategory *)context)->state;
+  s->workspaceRows[s->gameSection]=s->selectedGameRow;
+  s->gameSection=GAME_HUB;
+}
+
+static int optionsCubeHubInput(void *context,int input) {
+  return (input&PAD_SQUARE)?optionsCubeAction(context,PAD_SQUARE):LUNA_CUBE_SUBMENU_STAY;
+}
+
+static void optionsCubeLoop(OptionsMenuState *s) {
+  OptionsCubeCategory contexts[GAME_SECTION_COUNT];
+  LunaCubeSubmenu submenus[GAME_SECTION_COUNT];
+  const char *labels[GAME_SECTION_COUNT];
+  int count=owCategoryCount(s);
+  for(int i=0;i<count;i++) {
+    contexts[i]=(OptionsCubeCategory){s,i};
+    labels[i]=owSectionLabel(owCategorySection(s,i));
+    submenus[i]=(LunaCubeSubmenu){.context=&contexts[i],.begin=optionsCubeBegin,
+      .draw=optionsCubeDraw,.input=optionsCubeInput,.end=optionsCubeEnd};
+  }
+  LunaCubeHub hub={.title="Game Options",.labels=labels,.count=count,
+    .submenus=submenus,.submenuCount=count,.confirmRow=-1,.context=s,
+    .description=optionsCubeDescription,.subtitle=s->target->name,
+    .testLabel=s->target->platform==TARGET_PS1?"Launch":"Test",
+    .background=optionsCubeBackground,.input=optionsCubeHubInput};
+  uiCubeHubLoop(&s->selectedGameHubRow,NULL,&hub);
 }

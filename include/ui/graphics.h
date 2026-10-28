@@ -123,6 +123,8 @@ int getIconWidth(IconType iconType);
 
 // Draws the icon at specified coordinates
 void drawIcon(float x, float y, int z, uint64_t color, IconType iconType);
+// Official wordmark; pixel coordinates, original aspect, standard color/opacity.
+void drawLunaLogo(float centerX, float top, float width, int z, uint64_t color);
 void drawIconScaled(float x, float y, int z, uint64_t color, IconType iconType, float scale);
 
 // Draws the icon in [x1,y1],[x2,y2] window.

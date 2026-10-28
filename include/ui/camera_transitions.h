@@ -8,7 +8,7 @@ void lunaCameraSceneBeforeBackground(void);
 void lunaCameraSceneAfterBackground(void);
 void lunaCameraSceneEnd(void);
 // Scoped foreground transform; shared backgrounds remain untransformed.
-void lunaCameraLayerBegin(float scale, float opacity, float offsetY);
+void lunaCameraLayerBegin(float scale, float opacity, float offsetX, float offsetY);
 void lunaCameraLayerEnd(void);
 void lunaCameraMenuReturnStart(uint32_t nowMs);
 void lunaCameraMenuReturnCancel(void);

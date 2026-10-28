@@ -31,7 +31,8 @@ typedef struct {
   uint32_t savedAt;
   const char *message;
   char value[96];
-  int focus,rows[6];
+  int rows[6];
+  LunaCubePageFocus pageFocus;
 } AppearanceEditor;
 
 static void appearanceReleaseButtons(void) {
@@ -196,8 +197,7 @@ int uiAppearanceLoop(Target *target) {
   appearancePreview(&state,&state.saved);
   if(state.loadError)state.message="Could not read appearance settings";
   else if(previewError)state.message="Could not preview appearance";
-  LunaCubeWorkspace workspace={&state,appearanceWorkspaceDraw,appearanceWorkspaceInput};
-  uiCubeWorkspaceLoop(&workspace);appearanceReleaseButtons();return 0;
+  appearanceCubeLoop(&state);appearanceReleaseButtons();return 0;
 }
 
 typedef struct {
@@ -226,7 +226,8 @@ static void defaultsSubmenuBegin(void *context) {
 }
 static void defaultsSubmenuDraw(void *context,float opacity) {
   DefaultsEditor *state=context;
-  LunaCubePage page={"Game Defaults",2,defaultsLabel,defaultsValue,defaultsDescription,defaultsAdjust,state,NULL};
+  LunaCubePage page={.title="Game Defaults",.count=2,.label=defaultsLabel,
+    .value=defaultsValue,.description=defaultsDescription,.adjust=defaultsAdjust,.context=state};
   uiCubeSubmenuPageDraw(&page,state->selected,&state->focus,opacity);
 }
 static int defaultsSubmenuInput(void *context,int input) {
