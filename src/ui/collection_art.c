@@ -49,12 +49,99 @@ static void discardEntry(CollectionArtReuseCache *cache, int index) {
   memset(entry, 0, sizeof(*entry));
 }
 
+int collectionArtReuseRank(const CollectionArtReuseCache *cache, const char *path) {
+  if (path != NULL && path[0])
+    for (int i = 0; i < cache->demandCount; i++)
+      if (strcmp(cache->demand[i], path) == 0) return i;
+  return -1;
+}
+
+int collectionArtReuseContains(const CollectionArtReuseCache *cache, const char *path) {
+  if (path != NULL && path[0])
+    for (int i = 0; i < COLLECTION_REUSE_COUNT; i++)
+      if (strcmp(cache->entries[i].path, path) == 0) return 1;
+  return 0;
+}
+
+void collectionArtReusePlan(CollectionArtReuseCache *cache,
+                            const char (*paths)[COLLECTION_ART_PATH], int count) {
+  uint8_t attempted[COLLECTION_DEMAND_COUNT] = {0};
+  if (count < 0) count = 0;
+  if (count > COLLECTION_DEMAND_COUNT) count = COLLECTION_DEMAND_COUNT;
+  if (paths != NULL) {
+    for (int i = 0; i < count; i++) {
+      int previous = collectionArtReuseRank(cache, paths[i]);
+      if (previous >= 0) attempted[i] = cache->attempted[previous];
+    }
+    memcpy(cache->demand, paths, (size_t)count * sizeof(cache->demand[0]));
+    memcpy(cache->attempted, attempted, sizeof(attempted));
+    cache->demandCount = count;
+    cache->forward = 1;
+    for (int i = 0; i < COLLECTION_REUSE_COUNT; i++)
+      if (cache->entries[i].path[0] && collectionArtReuseRank(cache, cache->entries[i].path) < 0)
+        discardEntry(cache, i);
+  } else {
+    cache->demandCount = cache->forward = 0;
+    memset(cache->attempted, 0, sizeof(cache->attempted));
+    // Preserve the original twelve-entry history behavior for other views.
+    for (;;) {
+      int used = 0, oldest = -1;
+      for (int i = 0; i < COLLECTION_REUSE_COUNT; i++) {
+        if (!cache->entries[i].path[0]) continue;
+        used++;
+        if (oldest < 0 || cache->entries[i].lastUsed < cache->entries[oldest].lastUsed)
+          oldest = i;
+      }
+      if (used <= COLLECTION_REUSE_HISTORY_COUNT) break;
+      discardEntry(cache, oldest);
+    }
+  }
+}
+
+int collectionArtReuseCanPut(const CollectionArtReuseCache *cache, const char *path,
+                             size_t bytes) {
+  if (!path || !path[0] || bytes == 0 || bytes > COLLECTION_REUSE_BYTES) return 0;
+  if (!cache->forward) return 1;
+  int rank = collectionArtReuseRank(cache, path), nearer = 0;
+  size_t retained = 0;
+  if (rank < 0) return 0;
+  for (int i = 0; i < COLLECTION_REUSE_COUNT; i++) {
+    const CollectionArtReuseEntry *entry = &cache->entries[i];
+    int other = collectionArtReuseRank(cache, entry->path);
+    if (other >= 0 && other < rank) {
+      retained += entry->pixels.bytes;
+      nearer++;
+    }
+  }
+  return nearer < COLLECTION_REUSE_COUNT && retained <= COLLECTION_REUSE_BYTES - bytes;
+}
+
+int collectionArtPrefetchAttempted(const CollectionArtReuseCache *cache, const char *path) {
+  int rank = collectionArtReuseRank(cache, path);
+  return rank >= 0 && cache->attempted[rank];
+}
+
+void collectionArtPrefetchAttempt(CollectionArtReuseCache *cache, const char *path, int attempted) {
+  int rank = collectionArtReuseRank(cache, path);
+  if (rank >= 0) cache->attempted[rank] = attempted != 0;
+}
+
+int collectionArtPrefetchIndex(int total, int selected, int direction, int candidate) {
+  if (candidate < 0 || candidate >= COLLECTION_PREFETCH_COUNT ||
+      total <= PSBBN_COVER_CACHE_COUNT || candidate >= total - PSBBN_COVER_CACHE_COUNT)
+    return -1;
+  int step = direction < 0 ? -1 : 1;
+  int edge = step > 0 ? PSBBN_COVER_CACHE_COUNT - PSBBN_COVER_CACHE_FOCUS :
+                       PSBBN_COVER_CACHE_FOCUS + 1;
+  return lunaNavWrap(total, selected + step * (edge + candidate));
+}
+
 int collectionArtReusePut(CollectionArtReuseCache *cache, const char *path,
                           CollectionArtPixels *pixels) {
   int slot = -1;
   if (path == NULL || path[0] == '\0' || strlen(path) >= sizeof(cache->entries[0].path) ||
       pixels->source == NULL || pixels->preview == NULL || pixels->thumbnail == NULL ||
-      pixels->bytes == 0 || pixels->bytes > COLLECTION_REUSE_BYTES)
+      !collectionArtReuseCanPut(cache, path, pixels->bytes))
     return 0;
   for (int i = 0; i < COLLECTION_REUSE_COUNT; i++) {
     CollectionArtReuseEntry *entry = &cache->entries[i];
@@ -62,17 +149,21 @@ int collectionArtReusePut(CollectionArtReuseCache *cache, const char *path,
       discardEntry(cache, i);
   }
   for (;;) {
-    int oldest = -1;
+    int oldest = -1, used = 0;
     slot = -1;
     for (int i = 0; i < COLLECTION_REUSE_COUNT; i++) {
       CollectionArtReuseEntry *entry = &cache->entries[i];
       if (!entry->path[0]) {
         if (slot < 0) slot = i;
-      } else if (oldest < 0 || entry->lastUsed < cache->entries[oldest].lastUsed) {
-        oldest = i;
+      } else {
+        used++;
+        if (oldest < 0 || (cache->forward ?
+            collectionArtReuseRank(cache, entry->path) > collectionArtReuseRank(cache, cache->entries[oldest].path) :
+            entry->lastUsed < cache->entries[oldest].lastUsed)) oldest = i;
       }
     }
-    if (slot >= 0 && cache->bytes + pixels->bytes <= COLLECTION_REUSE_BYTES)
+    int limit = cache->forward ? COLLECTION_REUSE_COUNT : COLLECTION_REUSE_HISTORY_COUNT;
+    if (slot >= 0 && used < limit && cache->bytes + pixels->bytes <= COLLECTION_REUSE_BYTES)
       break;
     discardEntry(cache, oldest);
   }
@@ -103,6 +194,8 @@ void collectionArtReuseClear(CollectionArtReuseCache *cache) {
   for (int i = 0; i < COLLECTION_REUSE_COUNT; i++)
     discardEntry(cache, i);
   cache->clock = 0;
+  cache->demandCount = cache->forward = 0;
+  memset(cache->attempted, 0, sizeof(cache->attempted));
 }
 
 int collectionArtEntryPriority(uint8_t *priority, int total, int selectedTitleIdx) {

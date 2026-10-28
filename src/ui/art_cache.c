@@ -42,6 +42,12 @@ static uint8_t collectionCoverResidentLevel[PSBBN_COVER_CACHE_COUNT];
 static char collectionCoverKeys[PSBBN_COVER_CACHE_COUNT][255];
 static CollectionArtReuseCache collectionReuseCache;
 static int collectionNavigationDirection;
+static TargetList *collectionPrefetchTitles;
+static int collectionPrefetchSelected = -1, collectionPrefetchTotal, collectionPrefetchDirection;
+static uint32_t collectionPrefetchGeneration;
+static int collectionPrefetchBlocked;
+static size_t collectionPrefetchBlockedBytes;
+static char collectionDemandPaths[COLLECTION_DEMAND_COUNT][COLLECTION_ART_PATH];
 GSTEXTURE *gridCoverTextures[GRID_PAGE_BUFFERS][GRID_CACHE_PAGE_SIZE];
 uint8_t gridCoverLoaded[GRID_PAGE_BUFFERS][GRID_CACHE_PAGE_SIZE];
 static uint8_t gridCoverAttempted[GRID_PAGE_BUFFERS][GRID_CACHE_PAGE_SIZE];
@@ -111,6 +117,7 @@ typedef struct {
   int sourceWidth;
   int sourceHeight;
   int result;
+  int prefetch;
 } PSBBNArtJob;
 static PSBBNArtJob collectionArtJob;
 static int collectionFarArtThreadId = -1;
@@ -935,9 +942,8 @@ static int loadPSBBNCoverArt(struct DeviceMapEntry *device, char *titleID, int c
   return 0;
 }
 
-static int collectionCoverPath(TargetList *titles, int selectedTitleIdx, int cacheIdx,
-                               char *path, size_t capacity) {
-  int targetIdx = lunaNavWrap(titles->total, selectedTitleIdx + cacheIdx - PSBBN_COVER_CACHE_FOCUS);
+static int collectionTitleArtworkPath(TargetList *titles, int targetIdx,
+                                      char *path, size_t capacity) {
   Target *target = getTargetByIdx(titles, targetIdx);
   struct DeviceMapEntry *device;
   if (target == NULL || target->id == NULL || target->device == NULL)
@@ -950,18 +956,66 @@ static int collectionCoverPath(TargetList *titles, int selectedTitleIdx, int cac
   return length >= 0 && length < (int)capacity ? 0 : -1;
 }
 
+static int collectionCoverPath(TargetList *titles, int selectedTitleIdx, int cacheIdx,
+                               char *path, size_t capacity) {
+  int targetIdx = lunaNavWrap(titles->total, selectedTitleIdx + cacheIdx - PSBBN_COVER_CACHE_FOCUS);
+  return collectionTitleArtworkPath(titles, targetIdx, path, capacity);
+}
+
+static void appendCollectionDemand(TargetList *titles, int targetIdx, int *count) {
+  char path[COLLECTION_ART_PATH];
+  if (collectionTitleArtworkPath(titles, targetIdx, path, sizeof(path)) < 0) return;
+  for (int i = 0; i < *count; i++)
+    if (!strcmp(collectionDemandPaths[i], path)) return;
+  strcpy(collectionDemandPaths[(*count)++], path);
+}
+
+static void planCollectionPrefetch(TargetList *titles, int selectedTitleIdx, int direction) {
+  if (!collectionArtForeground || titles == NULL || titles->total <= 0) {
+    if (collectionReuseCache.forward) collectionArtReusePlan(&collectionReuseCache, NULL, 0);
+    collectionPrefetchTitles = NULL;
+    return;
+  }
+  direction = direction < 0 ? -1 : 1;
+  if (collectionReuseCache.forward && titles == collectionPrefetchTitles &&
+      selectedTitleIdx == collectionPrefetchSelected && titles->total == collectionPrefetchTotal &&
+      direction == collectionPrefetchDirection && collectionArtGeneration == collectionPrefetchGeneration)
+    return;
+  uint8_t priority[PSBBN_COVER_CACHE_COUNT];
+  collectionArtPriority(priority, direction, 0, 0);
+  int count = 0;
+  // Active covers have first claim; the remaining budget serves nearest upcoming titles.
+  for (int p = 0; p < PSBBN_COVER_CACHE_COUNT; p++)
+    appendCollectionDemand(titles, lunaNavWrap(titles->total,
+        selectedTitleIdx + priority[p] - PSBBN_COVER_CACHE_FOCUS), &count);
+  for (int i = 0; i < COLLECTION_PREFETCH_COUNT; i++) {
+    int target = collectionArtPrefetchIndex(titles->total, selectedTitleIdx, direction, i);
+    if (target < 0) break;
+    appendCollectionDemand(titles, target, &count);
+  }
+  collectionArtReusePlan(&collectionReuseCache, collectionDemandPaths, count);
+  collectionPrefetchTitles = titles;
+  collectionPrefetchSelected = selectedTitleIdx;
+  collectionPrefetchTotal = titles->total;
+  collectionPrefetchDirection = direction;
+  collectionPrefetchGeneration = collectionArtGeneration;
+  collectionPrefetchBlocked = 0;
+}
+
 static void cancelObsoleteCollectionArtJob(PSBBNArtJob *job, TargetList *titles,
                                            int selectedTitleIdx) {
   if (job->state != 1 || job->cancelled)
     return;
   if (job->generation == collectionArtGeneration && titles != NULL && titles->total > 0) {
-    // Keep useful prefetches, including wrapped/duplicate titles in small lists.
     for (int i = 0; i < PSBBN_COVER_CACHE_COUNT; i++) {
       char path[255];
       if (collectionCoverPath(titles, selectedTitleIdx, i, path, sizeof(path)) == 0 &&
           strcmp(path, job->path) == 0)
         return;
     }
+    if (collectionArtForeground && collectionReuseCache.forward &&
+        collectionArtReuseRank(&collectionReuseCache, job->path) >= 0)
+      return;
   }
   artworkSliceCancelJob(&job->cancelled);
 }
@@ -1113,6 +1167,12 @@ void setCollectionArtForeground(int foreground) {
   if (collectionArtForeground == foreground)
     return;
   collectionArtForeground = foreground;
+  collectionPrefetchTitles = NULL;
+  if (!foreground) {
+    if (collectionArtJob.prefetch) artworkSliceCancelJob(&collectionArtJob.cancelled);
+    if (collectionFarArtJob.prefetch) artworkSliceCancelJob(&collectionFarArtJob.cancelled);
+    collectionArtReusePlan(&collectionReuseCache, NULL, 0);
+  }
   const int priority = foreground ? COLLECTION_ART_FOREGROUND_PRIORITY :
                                     COLLECTION_ART_BACKGROUND_PRIORITY;
   // Change existing threads too, so leaving Collection does not wait for a
@@ -2241,6 +2301,7 @@ static void refreshBackgroundCovers(TargetList *titles, int selectedTitleIdx,
 void refreshCollectionCovers(TargetList *titles, int selectedTitleIdx, int previousTitleIdx) {
   collectionNavigationDirection = previousTitleIdx >= 0 ?
       lunaNavDirection(titles->total, previousTitleIdx, selectedTitleIdx) : 0;
+  planCollectionPrefetch(titles, selectedTitleIdx, collectionNavigationDirection);
   refreshBackgroundCovers(titles, selectedTitleIdx, previousTitleIdx);
   cancelObsoleteCollectionArtJob(&collectionArtJob, titles, selectedTitleIdx);
   cancelObsoleteCollectionArtJob(&collectionFarArtJob, titles, selectedTitleIdx);
@@ -2267,9 +2328,11 @@ static void serviceBackgroundCovers(TargetList *titles, int selectedTitleIdx,
   char path[255];
   if (job->state == 2) {
     __asm__ __volatile__("" ::: "memory");
+
     if (job->cancelled) {
-      // A reversal can bring the path back before cancellation is serviced.
-      // Retry it rather than caching a cancellation as a missing image.
+      if (job->prefetch) collectionArtPrefetchAttempt(&collectionReuseCache, job->path, 0);
+      // A reversal can make this path useful again before cancellation finishes.
+      // Retry it instead of treating the cancelled request as missing artwork.
       for (int i = 0; i < PSBBN_COVER_CACHE_COUNT; i++) {
         if (!collectionCoverResolved[i] &&
             collectionCoverPath(titles, selectedTitleIdx, i, path, sizeof(path)) == 0 &&
@@ -2304,9 +2367,11 @@ static void serviceBackgroundCovers(TargetList *titles, int selectedTitleIdx,
         break;
       }
     }
+
     // A successful decode that left the window is still useful on a reversal
     // or list switch. Retain its complete artwork without touching worker memory.
-    if (job->sourcePixels != NULL) {
+    if (job->sourcePixels != NULL && !job->cancelled &&
+        (!job->prefetch || job->generation == generation)) {
       CollectionArtPixels pixels = {job->sourcePixels, job->previewPixels, job->texture.Mem,
           job->sourceWidth, job->sourceHeight,
           (size_t)gsKit_texture_size(job->sourceWidth, job->sourceHeight, GS_PSM_CT32) +
@@ -2314,6 +2379,13 @@ static void serviceBackgroundCovers(TargetList *titles, int selectedTitleIdx,
            PSBBN_THUMBNAIL_SIZE * PSBBN_THUMBNAIL_SIZE) * sizeof(PSBBNPixel)};
       if (collectionArtReusePut(&collectionReuseCache, job->path, &pixels)) {
         job->sourcePixels = job->previewPixels = job->texture.Mem = NULL;
+      } else if (job->prefetch && collectionReuseCache.forward &&
+                 collectionArtReuseRank(&collectionReuseCache, job->path) >= 0) {
+        // A larger-than-expected cover must not displace nearer prepared covers,
+        // or be decoded again every frame while the budget stays full.
+        collectionPrefetchBlocked = 1;
+        collectionPrefetchBlockedBytes = collectionReuseCache.bytes;
+        collectionArtPrefetchAttempt(&collectionReuseCache, job->path, 0);
       }
     }
     clearPSBBNArtJob(job);
@@ -2332,10 +2404,69 @@ static void serviceBackgroundCovers(TargetList *titles, int selectedTitleIdx,
     snprintf(job->path, sizeof(job->path), "%s", path);
     job->generation = generation;
     job->result = -1;
+    job->cancelled = 0;
+    job->prefetch = 0;
     job->sourceWidth = job->sourceHeight = 0;
     job->state = 1;
     SignalSema(wakeSema);
     break;
+  }
+}
+
+static void serviceCollectionForwardPrefetch(TargetList *titles, int selectedTitleIdx,
+                                             int entering) {
+  if (!collectionArtForeground || !collectionReuseCache.forward || entering ||
+      collectionArtJob.state != 0 || collectionFarArtJob.state != 0)
+    return;
+  for (int i = 0; i < PSBBN_COVER_CACHE_COUNT; i++)
+    if (!collectionCoverResolved[i]) return;
+  if (collectionPrefetchBlocked && collectionReuseCache.bytes >= collectionPrefetchBlockedBytes)
+    return;
+  collectionPrefetchBlocked = 0;
+  PSBBNArtJob *job = collectionFarArtThreadId >= 0 ? &collectionFarArtJob : &collectionArtJob;
+  int wakeSema = collectionFarArtThreadId >= 0 ? collectionFarArtWakeSema : collectionArtWakeSema;
+  if (wakeSema < 0) return;
+  for (int i = 0; i < COLLECTION_PREFETCH_COUNT; i++) {
+    char path[COLLECTION_ART_PATH];
+    int target = collectionArtPrefetchIndex(titles->total, selectedTitleIdx,
+                                            collectionPrefetchDirection, i);
+    if (target < 0) break;
+    if (collectionTitleArtworkPath(titles, target, path, sizeof(path)) < 0 ||
+        collectionArtReuseContains(&collectionReuseCache, path) ||
+        collectionArtPrefetchAttempted(&collectionReuseCache, path)) continue;
+    // Even the smallest complete bundle cannot fit: leave the worker idle.
+    size_t minimum = (PSBBN_PREVIEW_SIZE * PSBBN_PREVIEW_SIZE +
+                      PSBBN_THUMBNAIL_SIZE * PSBBN_THUMBNAIL_SIZE + 1U) * sizeof(PSBBNPixel);
+    if (!collectionArtReuseCanPut(&collectionReuseCache, path, minimum)) return;
+    collectionArtPrefetchAttempt(&collectionReuseCache, path, 1);
+    snprintf(job->path, sizeof(job->path), "%s", path);
+    job->generation = collectionArtGeneration;
+    job->result = -1;
+    job->cancelled = 0;
+    job->prefetch = 1;
+    job->sourceWidth = job->sourceHeight = 0;
+    job->state = 1;
+    SignalSema(wakeSema);
+    return;
+  }
+}
+
+static void prioritizeCollectionVisibleArt(TargetList *titles, int selectedTitleIdx) {
+  int pending = 0;
+  for (int i = 0; i < PSBBN_COVER_CACHE_COUNT; i++)
+    if (!collectionCoverResolved[i]) pending = 1;
+  if (!pending) return;
+  PSBBNArtJob *jobs[] = {&collectionArtJob, &collectionFarArtJob};
+  for (int j = 0; j < 2; j++) {
+    PSBBNArtJob *job = jobs[j];
+    if (job->state != 1 || !job->prefetch || job->cancelled) continue;
+    int visible = 0;
+    for (int i = 0; i < PSBBN_COVER_CACHE_COUNT; i++) {
+      char path[COLLECTION_ART_PATH];
+      if (collectionCoverPath(titles, selectedTitleIdx, i, path, sizeof(path)) == 0 &&
+          !strcmp(path, job->path)) { visible = 1; break; }
+    }
+    if (!visible) artworkSliceCancelJob(&job->cancelled);
   }
 }
 
@@ -2345,6 +2476,11 @@ static int serviceCollectionCoversInternal(TargetList *titles, int selectedTitle
   uint8_t nearPriority[PSBBN_COVER_CACHE_COUNT];
   static const uint8_t farPriority[PSBBN_COVER_CACHE_COUNT] = {9, 8, 7, 6, 0, 1, 5, 2, 4, 3};
   if (direction == 0) direction = collectionNavigationDirection;
+  planCollectionPrefetch(titles, selectedTitleIdx, direction);
+  if (collectionArtForeground) {
+    cancelObsoleteCollectionArtJob(&collectionArtJob, titles, selectedTitleIdx);
+    cancelObsoleteCollectionArtJob(&collectionFarArtJob, titles, selectedTitleIdx);
+  }
   int requestCount = PSBBN_COVER_CACHE_COUNT;
   int entryCached = entering && collectionCoversReady(titles, selectedTitleIdx);
   if (entering)
@@ -2379,6 +2515,7 @@ static int serviceCollectionCoversInternal(TargetList *titles, int selectedTitle
     }
     if (entering)
       entryCached = collectionCoversReady(titles, selectedTitleIdx);
+    if (collectionArtForeground) prioritizeCollectionVisibleArt(titles, selectedTitleIdx);
     startCollectionFarArtWorker();
     // Drain a retiring far job before waking the hidden preload worker again.
     // Finished results still pass through adoption/reuse even without requests.
@@ -2395,6 +2532,7 @@ static int serviceCollectionCoversInternal(TargetList *titles, int selectedTitle
                               collectionArtGeneration, collectionFarArtWakeSema,
                               urgent ? nearPriority : farPriority, &collectionArtJob,
                               collectionArtForeground, requestCount);
+    serviceCollectionForwardPrefetch(titles, selectedTitleIdx, entering);
   } else if (titles->total > 0) {
     // Preserve the seven-game entry gate if worker creation failed. Attempt
     // one cover per service call, then yield to the splash or library loop.

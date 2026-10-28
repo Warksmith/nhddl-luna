@@ -5,8 +5,12 @@
 #include "ui/navigation.h"
 #include <stddef.h>
 
-#define COLLECTION_REUSE_COUNT 12
-#define COLLECTION_REUSE_BYTES (2U * 1024U * 1024U)
+#define COLLECTION_REUSE_COUNT 16
+#define COLLECTION_REUSE_HISTORY_COUNT 12
+#define COLLECTION_REUSE_BYTES (4U * 1024U * 1024U)
+#define COLLECTION_PREFETCH_COUNT 16
+#define COLLECTION_DEMAND_COUNT (PSBBN_COVER_CACHE_COUNT + COLLECTION_PREFETCH_COUNT)
+#define COLLECTION_ART_PATH 255
 #define COLLECTION_ENTRY_COVER_COUNT (PSBBN_COVER_CACHE_COUNT - PSBBN_COVER_CACHE_FOCUS)
 
 typedef struct {
@@ -28,6 +32,11 @@ typedef struct {
   CollectionArtReuseEntry entries[COLLECTION_REUSE_COUNT];
   size_t bytes;
   uint64_t clock;
+  // UI-owned, nearest-first demand. Disabled outside visible Collections.
+  char demand[COLLECTION_DEMAND_COUNT][COLLECTION_ART_PATH];
+  uint8_t attempted[COLLECTION_DEMAND_COUNT];
+  int demandCount;
+  int forward;
 } CollectionArtReuseCache;
 
 // Successful puts/takes transfer ownership and clear the previous owner.
@@ -36,6 +45,17 @@ int collectionArtReusePut(CollectionArtReuseCache *cache, const char *path,
 int collectionArtReuseTake(CollectionArtReuseCache *cache, const char *path,
                            CollectionArtPixels *pixels);
 void collectionArtReuseClear(CollectionArtReuseCache *cache);
+// NULL restores the original history policy. Planning preserves attempts by path.
+void collectionArtReusePlan(CollectionArtReuseCache *cache,
+                            const char (*paths)[COLLECTION_ART_PATH], int count);
+int collectionArtReuseRank(const CollectionArtReuseCache *cache, const char *path);
+int collectionArtReuseContains(const CollectionArtReuseCache *cache, const char *path);
+int collectionArtReuseCanPut(const CollectionArtReuseCache *cache, const char *path,
+                             size_t bytes);
+int collectionArtPrefetchAttempted(const CollectionArtReuseCache *cache, const char *path);
+void collectionArtPrefetchAttempt(CollectionArtReuseCache *cache, const char *path, int attempted);
+// A distinct title beyond the active window, or -1 for exhausted/small libraries.
+int collectionArtPrefetchIndex(int total, int selected, int direction, int candidate);
 // Preserve focal detail with UI headroom; other cover textures are evictable.
 size_t collectionArtSourceBudget(size_t capacity);
 // Returns 0 unchanged, 1 resized, or -1 if no resolution fits. Never upscales.
