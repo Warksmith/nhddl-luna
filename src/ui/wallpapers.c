@@ -161,43 +161,6 @@ static void drawRonin(uint32_t time) {
   }
 }
 
-static void drawGridrunner(uint32_t time) {
-  gradient(color(2, 4, 14, 128), color(8, 12, 27, 128));
-  stars(time, 46, 170, 185, 215);
-  glow(320, 130, 70, 60, color(75, 110, 165, 14), color(35, 50, 90, 0));
-  // Build the lit crescent directly, avoiding a dark disc over the sky gradient.
-  // An offset, slightly larger inner circle leaves a slender right-hand crescent.
-  for (unsigned i = 0; i < 64; i++) {
-    WallpaperPoint inner[2], outer[2];
-    for (unsigned j = 0; j < 2; j++) {
-      const float y = -34 + (i + j) * (68.0f / 64);
-      const float edge = sqrtf(fmaxf(0, 34 * 34 - y * y));
-      const float cut = -14 + sqrtf(fmaxf(0, 36 * 36 - y * y));
-      inner[j] = point(320 + fminf(edge, fmaxf(-edge, cut)), 130 + y);
-      outer[j] = point(320 + edge, 130 + y);
-    }
-    quad(inner[0], outer[0], inner[1], outer[1], color(130, 155, 195, 100),
-         color(210, 225, 245, 112), color(130, 155, 195, 100), color(210, 225, 245, 112));
-  }
-  for (unsigned i = 0; i < 8; i++) {
-    const uint32_t seed = hash(i + 93U);
-    triangle(point(i * 90.0f - 40, 242), point(i * 90.0f + 16, 198 - seed % 29U),
-             point(i * 90.0f + 90, 242), color(4, 7, 18, 128),
-             color(8, 12, 27, 128), color(4, 7, 18, 128));
-  }
-  quad(point(0, 238), point(640, 238), point(0, 448), point(640, 448),
-       color(4, 7, 18, 128), color(4, 7, 18, 128), color(4, 9, 24, 128), color(4, 9, 24, 128));
-  for (int i = -5; i <= 5; i++)
-    line(320 + i * 4, 238, 320 + i * 64, 448, color(42, 130, 190, 38));
-  const float travel = cycle(time, 1800, 0);
-  for (int i = 0; i < 16; i++) {
-    const float depth = (i + travel) / 16;
-    const float y = 238 + depth * depth * 210;
-    line(0, y, 640, y, color(48, 150, 210, 10 + (int)(depth * 40)));
-  }
-  line(0, 238, 640, 238, color(95, 75, 165, 40));
-}
-
 static void drawTorch(uint32_t time) {
   gradient(color(9, 4, 8, 128), color(40, 9, 7, 128));
   const int breath = 20 + (int)(wave(phase(time, 9000)) * 5);
@@ -314,7 +277,6 @@ void drawAnimatedWallpaper(LibraryBackground background, uint32_t nowMs) {
   switch (background) {
     case LIBRARY_BACKGROUND_AURORA: drawAurora(clock->elapsed); break;
     case LIBRARY_BACKGROUND_RONIN: drawRonin(clock->elapsed); break;
-    case LIBRARY_BACKGROUND_GRIDRUNNER: drawGridrunner(clock->elapsed); break;
     case LIBRARY_BACKGROUND_TORCH: drawTorch(clock->elapsed); break;
     case LIBRARY_BACKGROUND_TEMPEST: drawTempest(clock->elapsed); break;
     default: break;

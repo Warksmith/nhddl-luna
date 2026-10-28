@@ -268,7 +268,7 @@ static LibraryBackground legacyLibraryBackground(Target *target) {
     if (!strcmp(value, "ronin"))
       return LIBRARY_BACKGROUND_RONIN;
     if (!strcmp(value, "gridrunner"))
-      return LIBRARY_BACKGROUND_GRIDRUNNER;
+      return LIBRARY_BACKGROUND_STARS;
     if (!strcmp(value, "torch") || !strcmp(value, "ember"))
       return LIBRARY_BACKGROUND_TORCH;
     if (!strcmp(value, "tempest"))

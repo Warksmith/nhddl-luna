@@ -21,7 +21,6 @@ typedef enum {
   LIBRARY_BACKGROUND_NEO,
   LIBRARY_BACKGROUND_AURORA,
   LIBRARY_BACKGROUND_RONIN,
-  LIBRARY_BACKGROUND_GRIDRUNNER,
   LIBRARY_BACKGROUND_TORCH,
   LIBRARY_BACKGROUND_TEMPEST,
   LIBRARY_BACKGROUND_SPACE_FLIGHT,
@@ -32,7 +31,6 @@ void resetGlassVisuals(uint32_t startMs);
 void initSystemConfigCapture(void);
 void initGlassStarAtlas(void);
 int setLibraryBackground(LibraryBackground background);
-LibraryBackground getLibraryBackground(void);
 void setGlassColorPreset(GlassColorPreset preset);
 GlassColorPreset getGlassColorPreset(void);
 uint64_t glassPresetColor(int red, int green, int blue, int alpha);

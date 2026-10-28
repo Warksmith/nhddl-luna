@@ -16,11 +16,8 @@ typedef struct {
   void *context;
   void (*draw)(void *context, float opacity);
   int (*input)(void *context, int buttons);
-  int (*selection)(void *context);
 } LunaCubeWorkspace;
 void uiCubeWorkspaceLoop(const LunaCubeWorkspace *workspace);
-// Returns the chosen row, or -1 for Back. Editable pages adjust in place.
-int uiCubePageLoop(const LunaCubePage *page, int *selected);
 enum { LUNA_CUBE_SUBMENU_STAY, LUNA_CUBE_SUBMENU_BACK, LUNA_CUBE_SUBMENU_DONE };
 typedef struct {
   void *context;

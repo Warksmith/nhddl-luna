@@ -20,8 +20,6 @@ static float randomUnit(void) {
 static int clampSetting(int value, int maximum) {
   return value < 0 ? 0 : value > maximum ? maximum : value;
 }
-int lunaSpaceSpeed(void) { return speedSetting; }
-int lunaSpaceDepth(void) { return depthSetting; }
 void lunaSpaceSetSpeed(int setting) { speedSetting = clampSetting(setting, 8); }
 void lunaSpaceSetDepth(int setting) { depthSetting = clampSetting(setting, 4); }
 static void initSpace(uint32_t nowMs) {
@@ -83,9 +81,24 @@ int lunaSpaceProject(int index, int width, int height, LunaSpacePoint *point) {
   return point->x >= -48 && point->x <= width + 48 && point->y >= -48 && point->y <= height + 48;
 }
 #ifndef LUNA_SPACE_MODEL_ONLY
+enum { SPACE_GLOW_SEGMENTS = 24 };
+static struct { float x, y; } spaceGlow[SPACE_GLOW_SEGMENTS + 1];
+static int spaceGlowWidth, spaceGlowHeight;
+static void prepareSpaceGlow(int width, int height) {
+  if (spaceGlowWidth == width && spaceGlowHeight == height) return;
+  // Preserve both endpoints and the original arithmetic at each screen size.
+  for (int point = 0; point <= SPACE_GLOW_SEGMENTS; ++point) {
+    const float angle = point * 6.2831853f / SPACE_GLOW_SEGMENTS;
+    spaceGlow[point].x = width * 0.5f + cosf(angle) * width * 0.45f;
+    spaceGlow[point].y = height * 0.46f + sinf(angle) * height * 0.35f;
+  }
+  spaceGlowWidth = width;
+  spaceGlowHeight = height;
+}
 void drawSpaceFlight(uint32_t nowMs) {
   lunaSpaceStep(nowMs);
   const int w = gsGlobal->Width, h = gsGlobal->Height;
+  prepareSpaceGlow(w, h);
   const int previousAlpha = gsGlobal->PrimAlphaEnable;
   const GSTEST previousTest = *gsGlobal->Test;
   const uint64_t previousBlend = gsGlobal->PrimAlpha;
@@ -100,12 +113,10 @@ void drawSpaceFlight(uint32_t nowMs) {
   gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
   gsKit_set_primalpha(gsGlobal, GS_SETREG_ALPHA(0, 1, 0, 1, 0), 0);
   /* Original procedural glow: no Sony textures or native runtime are used. */
-  for (int segment = 0; segment < 24; ++segment) {
-    const float a = segment * 6.2831853f / 24;
-    const float b = (segment + 1) * 6.2831853f / 24;
+  for (int segment = 0; segment < SPACE_GLOW_SEGMENTS; ++segment) {
     gsKit_prim_triangle_gouraud(gsGlobal, w * 0.5f, h * 0.46f,
-        w * 0.5f + cosf(a) * w * 0.45f, h * 0.46f + sinf(a) * h * 0.35f,
-        w * 0.5f + cosf(b) * w * 0.45f, h * 0.46f + sinf(b) * h * 0.35f,
+        spaceGlow[segment].x, spaceGlow[segment].y,
+        spaceGlow[segment + 1].x, spaceGlow[segment + 1].y,
         0, GS_SETREG_RGBA(0x12, 0x38, 0x68, 0x12),
         GS_SETREG_RGBA(0x12, 0x38, 0x68, 0), GS_SETREG_RGBA(0x12, 0x38, 0x68, 0));
   }

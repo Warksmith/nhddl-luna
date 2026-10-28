@@ -21,7 +21,7 @@ enum { AP_BACKGROUND,AP_VIEWS,AP_COLORS,AP_EFFECTS,AP_TEXT,AP_SOUND };
 static const char *const categories[]={"Backgrounds","Library Views","Interface Colors",
   "Background Effects","Text","Ambient Sound"};
 static const char *const backgrounds[]={"Stars & cubes","Ambient Orbs","Red Clouds","Midnight Cubes",
-  "System Configuration","Neo","Aurora","Ronin","Gridrunner","Torch","Tempest","Space Flight"};
+  "System Configuration","Neo","Aurora","Ronin","Torch","Tempest","Space Flight"};
 static const char *const colors[]={"Original","Cyan","Violet","Rose","Green","Gold","White"};
 static const char *const shapes[]={"Diamond","Cube","Octahedron","Sphere","LUNA","Skull","Atom","Iron cross"};
 typedef struct {
@@ -196,8 +196,7 @@ int uiAppearanceLoop(Target *target) {
   appearancePreview(&state,&state.saved);
   if(state.loadError)state.message="Could not read appearance settings";
   else if(previewError)state.message="Could not preview appearance";
-  LunaCubeWorkspace workspace={&state,appearanceWorkspaceDraw,appearanceWorkspaceInput,
-    appearanceWorkspaceSelection};
+  LunaCubeWorkspace workspace={&state,appearanceWorkspaceDraw,appearanceWorkspaceInput};
   uiCubeWorkspaceLoop(&workspace);appearanceReleaseButtons();return 0;
 }
 

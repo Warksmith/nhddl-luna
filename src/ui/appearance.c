@@ -21,7 +21,7 @@ static const char *const recordNames[] = {
 };
 static const char *const backgrounds[] = {
   "stars", "orbs", "red-clouds", "midnight-cubes", "system-config", "neo",
-  "aurora", "ronin", "gridrunner", "torch", "tempest", "space-flight"
+  "aurora", "ronin", "torch", "tempest", "space-flight"
 };
 static const char *const glasses[] = {"original", "white-gray", "black", "cyber"};
 static const char *const fonts[] = {"dejavu", "psbbn"};
@@ -111,6 +111,11 @@ static int parseUnsigned(const char *text, uint32_t *value) {
 
 static int parseField(const AppearanceField *field, char *value, uint32_t *out) {
   *out = 0;
+  // Retired backgrounds fall back without discarding the other preferences.
+  if (field->offset == offsetof(LunaAppearance, background) && !strcmp(value, "gridrunner")) {
+    *out = LIBRARY_BACKGROUND_STARS;
+    return 0;
+  }
   if (field->mask && !strcmp(value, "none"))
     return field->offset == offsetof(LunaAppearance, orbShapes) ? 0 : -EINVAL;
   do {

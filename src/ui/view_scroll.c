@@ -381,10 +381,6 @@ int setLibraryBackground(LibraryBackground background) {
   return 0;
 }
 
-LibraryBackground getLibraryBackground(void) {
-  return libraryBackground;
-}
-
 void setGlassColorPreset(GlassColorPreset preset) {
   glassColorPreset = (preset >= GLASS_COLOR_ORIGINAL && preset < GLASS_COLOR_COUNT)
                         ? preset : GLASS_COLOR_ORIGINAL;

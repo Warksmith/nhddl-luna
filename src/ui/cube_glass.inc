@@ -3,10 +3,12 @@
 #include "cube_geometry.inc"
 
 typedef struct { float x,y,depth; } CubePoint;
+typedef struct { CubeVec sine,cosine; } CubeRotation;
 typedef struct { CubeVec v[4],normal; float front; } CubeGlassFace;
 typedef struct {
   CubeGlassFace face[6];
-  CubeVec position,rotation;
+  CubeVec position;
+  CubeRotation rotation;
   float left,top,width,height,depth,fade,highlight;
   unsigned visible;
 } CubeGlass;
@@ -28,10 +30,16 @@ static float cubeSY(float y){return y*gsGlobal->Height/480;}
 static uint64_t cubeColor(int r,int g,int b,float alpha) {
   return GS_SETREG_RGBA(r,g,b,(int)(128*cubeClamp(alpha)));
 }
-static CubeVec cubeRotate(CubeVec p,CubeVec r) {
-  CubeVec q={p.x,p.y*cosf(r.x)-p.z*sinf(r.x),p.y*sinf(r.x)+p.z*cosf(r.x)};
-  p=(CubeVec){q.x*cosf(r.y)+q.z*sinf(r.y),q.y,-q.x*sinf(r.y)+q.z*cosf(r.y)};
-  return (CubeVec){p.x*cosf(r.z)-p.y*sinf(r.z),p.x*sinf(r.z)+p.y*cosf(r.z),p.z};
+static CubeRotation cubePrepareRotation(CubeVec angles) {
+  return (CubeRotation){
+    {sinf(angles.x),sinf(angles.y),sinf(angles.z)},
+    {cosf(angles.x),cosf(angles.y),cosf(angles.z)}};
+}
+static CubeVec cubeRotate(CubeVec p,const CubeRotation *rotation) {
+  const CubeVec s=rotation->sine,c=rotation->cosine;
+  CubeVec q={p.x,p.y*c.x-p.z*s.x,p.y*s.x+p.z*c.x};
+  p=(CubeVec){q.x*c.y+q.z*s.y,q.y,-q.x*s.y+q.z*c.y};
+  return (CubeVec){p.x*c.z-p.y*s.z,p.x*s.z+p.y*c.z,p.z};
 }
 static CubePoint cubeProject(CubeVec p,CubeVec camera) {
   float depth=500+p.z-camera.z,scale=500/fmaxf(16,depth);
@@ -160,10 +168,26 @@ static void cubeBlit(GSTEXTURE *texture,float u0,float v0,float u1,float v1,floa
   cubeEmit(p,uv,4,cubeColor(128,128,128,alpha),mode!=0);
 }
 static void cubeGlassBuild(CubeGlass *s,int index,const CubeMenu *m,CubeVec camera,float fade) {
-  memset(s,0,sizeof(*s));s->position=cubePosition(index,m->time);s->rotation=cubeRotation(index,m->time);
+  memset(s,0,sizeof(*s));s->position=cubePosition(index,m->phase[index]);
+  CubeVec angles=cubeRotation(index,m->phase[index]);
+  CubeVec size={CUBE_SIDE,CUBE_SIDE,CUBE_SIDE};
+  int portal=m->submenuOpen&&index==m->selected%CUBE_COUNT;
+  if(portal) {
+    float t=cubeSmooth(m->submenuAge/CUBE_SUBMENU_MS);
+    /* The selected crystal unfolds into the options pane at (20,97)-(520,385).
+     * Keep its glass and contour throughout the reversible 1440 ms morph. */
+    s->position.x+=(50-s->position.x)*t;
+    s->position.y+=(-1-s->position.y)*t;
+    s->position.z*=1-t;
+    angles.x=remainderf(angles.x,2*CUBE_PI)*(1-t);
+    angles.y=remainderf(angles.y,2*CUBE_PI)*(1-t);
+    angles.z=remainderf(angles.z,2*CUBE_PI)*(1-t);
+    size=(CubeVec){CUBE_SIDE+(500-CUBE_SIDE)*t,
+        CUBE_SIDE+(288-CUBE_SIDE)*t,CUBE_SIDE+(2-CUBE_SIDE)*t};
+  }
   s->depth=500+s->position.z-camera.z;s->highlight=m->light[index];
   /* Native GetFadeFactor: ((distance-NEAR)/bounding_radius)-1, clamped. */
-  const float radius=40*.8660254038f;
+  const float radius=CUBE_SIDE*.8660254038f;
   s->fade=fade*cubeClamp((s->depth-16)/radius-1);
   CubePoint center=cubeProject(s->position,camera);
   float scale=cubeSceneScale*500/fmaxf(16,s->depth-radius);
@@ -174,21 +198,36 @@ static void cubeGlassBuild(CubeGlass *s,int index,const CubeMenu *m,CubeVec came
   float right=fminf(640,s->left+s->width),bottom=fminf(480,s->top+s->height);
   s->left=fmaxf(0,s->left);s->top=fmaxf(0,s->top);
   s->width=right-s->left;s->height=bottom-s->top;
-  if(s->width<=0||s->height<=0){s->fade=0;return;}
+  if(!portal&&(s->width<=0||s->height<=0)){s->fade=0;return;}
+  // Every face, corner and reflection offset shares this crystal's rotation.
+  s->rotation=cubePrepareRotation(angles);
   for(int f=0;f<6;f++) {
     CubeGlassFace *face=&s->face[f];
     const float *normal=cubeUnitMesh[f][0]+3;
-    face->normal=cubeRotate((CubeVec){normal[0],normal[1],normal[2]},s->rotation);
+    face->normal=cubeRotate((CubeVec){normal[0],normal[1],normal[2]},&s->rotation);
     CubeVec centerFace={0,0,0};
     for(int j=0;j<4;j++) {
       const float *v=cubeUnitMesh[f][j];
-      CubeVec q=cubeRotate((CubeVec){40*v[0],40*v[1],40*v[2]},s->rotation);
+      CubeVec q=cubeRotate((CubeVec){size.x*v[0],size.y*v[1],size.z*v[2]},&s->rotation);
       face->v[j]=(CubeVec){q.x+s->position.x,q.y+s->position.y,q.z+s->position.z};
       centerFace.x+=face->v[j].x*.25f;centerFace.y+=face->v[j].y*.25f;centerFace.z+=face->v[j].z*.25f;
     }
     face->front=face->normal.x*(-camera.x-centerFace.x)+face->normal.y*(camera.y-centerFace.y)+
       face->normal.z*(camera.z-500-centerFace.z);
     if(face->front>0)s->visible|=1U<<f;
+  }
+  if(portal) {
+    /* Crop the expanded geometry itself so its faces and rim stay intact. */
+    float left=640,top=480,right=0,bottom=0;
+    for(int f=0;f<6;f++)for(int j=0;j<4;j++) {
+      CubePoint p=cubeProject(s->face[f].v[j],camera);
+      left=fminf(left,p.x);top=fminf(top,p.y);
+      right=fmaxf(right,p.x);bottom=fmaxf(bottom,p.y);
+    }
+    s->left=fmaxf(0,left-2);s->top=fmaxf(0,top-2);
+    s->width=fminf(640,right+2)-s->left;
+    s->height=fminf(480,bottom+2)-s->top;
+    if(s->width<=0||s->height<=0)s->fade=0;
   }
 }
 enum {CUBE_REFRACTION_BACK,CUBE_REFRACTION_FRONT,CUBE_REFLECTION_BACK,CUBE_REFLECTION_FRONT,CUBE_GLOSS};
@@ -336,7 +375,7 @@ static void cubeGlassDraw(const CubeGlass *s,CubeVec camera) {
   cubeTarget(1);
   for(int f=0;f<6;f++)if(s->visible&(1U<<f)) {
     const float *n=cubeUnitMesh[f][0]+3;
-    CubeVec offset=cubeRotate((CubeVec){n[0]*80,n[1]*80,n[2]*80},s->rotation);
+    CubeVec offset=cubeRotate((CubeVec){n[0]*80,n[1]*80,n[2]*80},&s->rotation);
     float intensity=cubeClamp(1-fabsf(s->face[f].normal.z*2));
     /* DefineShape(face+1) translates the entire unit mesh by 2*normal. */
     cubeGlassFaces(s,camera,CUBE_REFLECTION_BACK,offset,intensity);

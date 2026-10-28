@@ -31,10 +31,6 @@ void setCollectionGameList(int enabled) {
   collectionListTitle = NULL;
 }
 
-int getCollectionGameList(void) {
-  return collectionGameList;
-}
-
 static int collectionListScrollOffset(int overflow, uint32_t elapsed) {
   if (overflow <= 0)
     return 0;

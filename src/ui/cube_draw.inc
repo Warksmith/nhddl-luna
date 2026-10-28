@@ -40,8 +40,9 @@ void uiCubeSubmenuPageDraw(const LunaCubePage *page,int selected,
                  ALIGN_LEFT,lunaText("System Configuration"));
   drawTextWindow(left,(int)cubeSY(60),right,(int)cubeSY(60)+line,6,
                  cubeColor(232,232,70,opacity),ALIGN_LEFT,lunaText(page->title));
-  drawGlassPanelWithOpacity((int)cubeSX(20),(int)cubeSY(97),(int)cubeSX(520),
-                            (int)cubeSY(385),5,104,opacity);
+  /* The expanded crystal supplies the pane's glass and rim. */
+  gsKit_prim_sprite(gsGlobal,cubeSX(22),cubeSY(99),cubeSX(518),cubeSY(383),5,
+      glassPresetColor(5,13,34,(int)(48*opacity)));
   if(page->count>0)uiCubeSubmenuFocusDraw(left-4,focusY-1,right-10,focusY+line+2,opacity);
   for(int row=first;row<page->count&&row<first+visible;row++) {
     const char *label=lunaText(page->label(page->context,row));
@@ -67,7 +68,7 @@ void uiCubeSubmenuPageDraw(const LunaCubePage *page,int selected,
   drawPromptBar(left,(int)cubeSY(426),(int)cubeSX(608),(int)cubeSY(464),7,ink,
                 (PromptBar){NULL,prompts,3});
 }
-static void cubeDraw(CubeMenu *m,const char *status,int confirmShutdown,const LunaCubePage *page,const LunaCubeWorkspace *workspace,const LunaCubeSubmenu *submenu) {
+static void cubeDraw(CubeMenu *m,const char *status,int confirmShutdown,const LunaCubeWorkspace *workspace,const LunaCubeSubmenu *submenu) {
   static const char *labels[]={"Virtual Memory Cards","Storage Devices","Language","Game Defaults","Exit LUNA","Shutdown"};
   gsKit_clear(gsGlobal,BGColor);gsKit_TexManager_nextFrame(gsGlobal);
   GSTEST savedTest=*gsGlobal->Test;uint64_t savedBlend=gsGlobal->PrimAlpha;
@@ -86,14 +87,6 @@ static void cubeDraw(CubeMenu *m,const char *status,int confirmShutdown,const Lu
   }
   CubeVec camera={0,0,0};
   float submenuProgress=m->submenuOpen?m->submenuAge/CUBE_SUBMENU_MS:0;
-  if(m->submenuOpen) {
-    CubeVec anchor=cubePosition(m->selected%CUBE_COUNT,m->time);
-    float dolly=cubeSmooth(submenuProgress);
-    /* Approach the selected crystal, letting it pass the right edge as the
-     * submenu arrives. Stop 96 units away to keep its faces safely visible. */
-    camera=(CubeVec){(-anchor.x-83)*dolly,(anchor.y-10.56f)*dolly,
-        (500+anchor.z-96)*dolly};
-  }
   if(m->entering) {
     /* LUNA easing adaptation. The native two-manager blend is not yet
      * recovered; preserve its 1200/1440 ms camera/exit timing landmarks. */
@@ -105,11 +98,7 @@ static void cubeDraw(CubeMenu *m,const char *status,int confirmShutdown,const Lu
   CubeGlass scene[CUBE_COUNT];int order[CUBE_COUNT];
   for(int i=0;i<CUBE_COUNT;i++) {
     float fade=overall;
-    if(m->submenuOpen) {
-      if(i==m->selected%CUBE_COUNT)
-        fade*=1-cubeSmooth((submenuProgress-.58f)/.42f);
-      else fade*=1-cubeSmooth(submenuProgress/.45f);
-    }
+    if(m->submenuOpen&&i!=m->selected%CUBE_COUNT)fade*=1-cubeSmooth(submenuProgress);
     if(m->entering&&i!=m->selected%CUBE_COUNT)fade*=1-cubeClamp(m->exit/1000);
     cubeGlassBuild(&scene[i],i,m,camera,fade);order[i]=i;
   }
@@ -118,39 +107,36 @@ static void cubeDraw(CubeMenu *m,const char *status,int confirmShutdown,const Lu
     while(j>0&&scene[order[j-1]].depth<scene[index].depth){order[j]=order[j-1];j--;}
     order[j]=index;
   }
-  for(int i=0;i<CUBE_COUNT;i++)cubeGlassDraw(&scene[order[i]],camera);
+  for(int i=0;i<CUBE_COUNT;i++) {
+    if(m->submenuOpen&&order[i]==m->selected%CUBE_COUNT)continue;
+    cubeGlassDraw(&scene[order[i]],camera);
+  }
+  if(m->submenuOpen)cubeGlassDraw(&scene[m->selected%CUBE_COUNT],camera);
   cubeRestoreGlassState();
   cubeText(60,20,cubeColor(185,210,235,text),"LUNA");
-  cubeText(175,page?105:128,cubeColor(232,232,70,text),lunaText(page?page->title:"System Configuration"));
+  cubeText(175,128,cubeColor(232,232,70,text),lunaText("System Configuration"));
   if(status)cubeText(320,53,cubeColor(215,229,244,text),status);
-  const int listTop=(int)cubeSY(page?140:167);
+  const int listTop=(int)cubeSY(167);
   const int rowStep=getFontLineHeight()+getFontLineHeight()/3;
   const int listCenter=(int)cubeSX(175),rowRight=(int)cubeSX(300);
   int visible=(int)((cubeSY(352)-listTop)/rowStep);
   if(visible<1)visible=1;
   if(visible>m->itemCount)visible=m->itemCount;
   int first=m->selected>=visible?m->selected-visible+1:0;
-  const char *selectedLabel=lunaText(page?page->label(page->context,m->selected):labels[m->selected]);
+  const char *selectedLabel=lunaText(labels[m->selected]);
   const int selectedLeft=listCenter-getLineWidth(selectedLabel)/2;
   int textRight=selectedLeft+getLineWidth(selectedLabel);
   if(textRight>rowRight-12)textRight=rowRight-12;
   if(text>.01f)drawPSBBNFocusGlow(selectedLeft,(int)(listTop+rowStep*fmaxf(0,fminf(visible-1,m->row-first))),rowRight,textRight);
   for(int i=first;i<first+visible;i++) {
     float alpha=text*(i==m->selected?1:.65f);
-    const char *label=lunaText(page?page->label(page->context,i):labels[i]);
+    const char *label=lunaText(labels[i]);
     uint64_t color=i==m->selected?GS_SETREG_RGBA(0xF0,0xFA,0xFF,0x80):HeaderTextColor;
     drawText(listCenter-getLineWidth(label)/2,listTop+rowStep*(i-first),6,rowRight,0,
         cubeTextFade(color,alpha),label);
   }
-  if(page&&page->value)cubeText(175,355,cubeColor(240,250,255,text),lunaText(page->value(page->context,m->selected)));
-  if(page&&page->description) {
-    const char *description=page->description(page->context,m->selected);
-    if(description)drawTextWindow((int)cubeSX(25),(int)cubeSY(381),(int)cubeSX(615),(int)cubeSY(424),6,
-        cubeColor(190,211,232,text),ALIGN_HCENTER,lunaText(description));
-  }
   ButtonPrompt prompts[]={{ICON_DPAD,lunaText("Select")},{ICON_CROSS,lunaText("Open")},{ICON_CIRCLE,lunaText("Back")}};
   ButtonPrompt confirm[]={{ICON_CROSS,lunaText("Confirm")},{ICON_CIRCLE,lunaText("Cancel")}};
-  if(page&&page->adjust)prompts[1].label=lunaText("Change");
   if(confirmShutdown)cubeText(175,365,cubeColor(240,250,255,text),lunaText("Power off the console?"));
   /* Controller artwork has its own alpha convention. Hand the prompt row to
    * the submenu when its contents appear instead of drawing both sets of icons. */

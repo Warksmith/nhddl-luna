@@ -2521,8 +2521,9 @@ static void storageSubmenuDraw(void *context, float opacity) {
   drawTextWindow(left, storageY(60), right, storageY(60) + line, 6,
                  storageInk(GS_SETREG_RGBA(232, 232, 70, 128), opacity),
                  ALIGN_LEFT, lunaText("Storage Devices"));
-  drawGlassPanelWithOpacity(storageX(20),storageY(97),storageX(520),storageY(385),
-                            5,104,opacity);
+  /* The expanded crystal supplies the pane's glass and rim. */
+  gsKit_prim_sprite(gsGlobal,storageX(22),storageY(99),storageX(518),storageY(383),5,
+      glassPresetColor(5,13,34,(int)(48*opacity)));
   drawTextWindow(left, storageY(100), right, storageY(100) + line, 6, ink,
                  ALIGN_LEFT, lunaText("Connected devices only"));
   int focusY = browserSelectorY(&editor->selector, editor->selected, first,

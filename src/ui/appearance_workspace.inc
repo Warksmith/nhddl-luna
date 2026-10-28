@@ -182,4 +182,3 @@ static int appearanceWorkspaceInput(void *context,int input) {
   }
   return 0;
 }
-static int appearanceWorkspaceSelection(void *context) {return ((AppearanceEditor *)context)->category;}
