@@ -38,11 +38,16 @@ _off64_t lseek64(int fd, _off64_t offset, int whence);
 #define OPL_CLEAR_END 0x000F4000u
 #define OPL_PAYLOAD_LIMIT (128 * 1024)
 #define OPL_MODULE_INFO(id, size) (((id) << 24) | (size))
+
+// Embedded PS2SDK mmceigr.irx, run by OPL's IGR to restore the boot card.
+extern unsigned char mmceigr_irx[] __attribute__((aligned(16)));
+extern uint32_t size_mmceigr_irx;
 #define ATA_DEVCTL_IS_48BIT 0x6840
 #define OPL_COMPAT_ALT_READ 0x0001
 #define OPL_COMPAT_SKIP_VIDEOS 0x0002
 #define OPL_COMPAT_DVD_DL 0x0004
 #define OPL_COMPAT_ACCURATE_READS 0x0008
+#define OPL_COMPAT_DISABLE_IGR 0x0020
 #define OPL_COMPAT_ENABLE_POFF 0x0100
 #define OPL_COMPAT_IOP_POFF 0x80000000u
 
@@ -517,11 +522,11 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
 
   OplModuleTable *table = (OplModuleTable *)OPL_STORAGE_START;
   OplModule *modules = (OplModule *)(OPL_STORAGE_START + sizeof(*table));
-  int ids[8] = {1, 2, 3, 4};
-  const unsigned char *data[8] = {payloads[PAYLOAD_UDNL].data, ioprp,
+  int ids[9] = {1, 2, 3, 4};
+  const unsigned char *data[9] = {payloads[PAYLOAD_UDNL].data, ioprp,
                                  payloads[PAYLOAD_IMGDRV].data,
                                  payloads[PAYLOAD_RESETSPU].data};
-  size_t sizes[8] = {payloads[PAYLOAD_UDNL].size, ioprpSize,
+  size_t sizes[9] = {payloads[PAYLOAD_UDNL].size, ioprpSize,
                           payloads[PAYLOAD_IMGDRV].size,
                           payloads[PAYLOAD_RESETSPU].size};
   int moduleCount = 4;
@@ -535,8 +540,16 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
     data[moduleCount] = payloads[PAYLOAD_VMC].data;
     sizes[moduleCount++] = payloads[PAYLOAD_VMC].size;
   }
+  // Everything OPL needs is already in memory, so the launcher's own MMCE
+  // card can switch too while OPL's IGR will return it to its boot card.
+  int mmceSlot = (compat & OPL_COMPAT_DISABLE_IGR) ? -1 : mmceLauncherSlot();
+  if (mmceSlot >= 0) {
+    ids[moduleCount] = 24; // OPL_MODULE_ID_LUNA_MMCEIGR
+    data[moduleCount] = mmceigr_irx;
+    sizes[moduleCount++] = size_mmceigr_irx;
+  }
   uintptr_t cursor = ((uintptr_t)(modules + moduleCount) + 15) & ~15u;
-  uintptr_t moduleAddresses[8];
+  uintptr_t moduleAddresses[9];
   for (int i = 0; i < moduleCount; i++) {
     if (cursor + sizes[i] >= OPL_STORAGE_LIMIT) {
       free(ioprp);
@@ -590,8 +603,8 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
   GetOsdConfigParam(&config->CustomOSDConfigParam);
   prepareOplGsm(arguments, config);
 
-  // MMCE cards switch in hardware and remain available without the file VMC module.
-  mmceMountVMC(target->id);
+  if (mmceSlot >= 0)
+    strcpy(config->LunaMmceIgrSlots, mmceSlot ? "01" : "10");
   result = patchKernel((void *)elf->entry, storageEnd,
                        &config->eeloadCopy, &config->initUserMemory);
   if (result) {
@@ -599,6 +612,9 @@ int launchOplTitle(Target *target, ArgumentList *arguments, const char *cheatPay
     freePayloads();
     return result;
   }
+  // MMCE cards switch in hardware and remain available without the file VMC
+  // module. Switch only past the last Neutrino fallback, which reads the card.
+  mmceMountVMC(target->id, mmceSlot >= 0);
 
   // Commit the handoff only after all checks that can fall back to Neutrino.
   // Preserve LUNA's libkernel region above OPL_CLEAR_END during installation.

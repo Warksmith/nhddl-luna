@@ -36,8 +36,17 @@ ModeType deviceDiscoveryFailures(void);
 void freeDeviceMapEntries(struct DeviceMapEntry *entries);
 void syncDeviceMap(void);
 
-// Uses MMCE devctl calls to switch memory card to given title ID
-void mmceMountVMC(char *titleID);
+// Uses MMCE devctl calls to switch memory card to given title ID.
+// Does nothing unless the GameID preference is enabled. The card holding the
+// launcher switches only with switchLauncherCard, once nothing more is read
+// from it and IGR will return it to its boot card.
+void mmceMountVMC(char *titleID, int switchLauncherCard);
+// Slot (0 or 1) of an MMCE card holding the launcher with GameID enabled, or -1.
+int mmceLauncherSlot(void);
+// LUNA-wide GameID preference, kept in gameid.cfg beside luna.elf. Off by default.
+void mmceGameIdConfigure(const char *directory);
+int mmceGameIdEnabled(void);
+int mmceGameIdSave(int enabled);
 
 // Name of the APA/PFS metadata partition currently mounted at pfs0:.
 const char *getMountedPFSPartition(void);

@@ -11,6 +11,7 @@
 #include "ui/ambient.h"
 #include "ui/space_flight.h"
 #include "options.h"
+#include "storage.h"
 #include <libpad.h>
 #include <math.h>
 #include <stdio.h>
@@ -200,40 +201,56 @@ int uiAppearanceLoop(Target *target) {
   appearanceCubeLoop(&state);appearanceReleaseButtons();return 0;
 }
 
+enum { DEFAULTS_LOGO, DEFAULTS_CORE, DEFAULTS_GAMEID, DEFAULTS_COUNT };
 typedef struct {
-  Target *target;int logo,core;const char *error;
+  Target *target;int logo,core,gameId;const char *error;
   int selected;LunaCubePageFocus focus;
 } DefaultsEditor;
-static const char *defaultsLabel(void *context,int row) {(void)context;return row?"Game core":"PlayStation 2 logo";}
+static const char *defaultsLabel(void *context,int row) {
+  (void)context;
+  return row==DEFAULTS_GAMEID?"Memory card GameID":row==DEFAULTS_CORE?"Game core":"PlayStation 2 logo";
+}
 static const char *defaultsValue(void *context,int row) {
-  DefaultsEditor *s=context;return row?(s->core?"OPL":"Neutrino"):(s->logo?"On":"Off");
+  DefaultsEditor *s=context;
+  if(row==DEFAULTS_GAMEID)return s->gameId?"On":"Off";
+  return row==DEFAULTS_CORE?(s->core?"OPL":"Neutrino"):(s->logo?"On":"Off");
 }
 static const char *defaultsDescription(void *context,int row) {
   DefaultsEditor *s=context;
-  return s->error?s->error:row?"Default game core. Each game can override it.":"Default PS2 startup logo. Each game can override it.";
+  if(s->error)return s->error;
+  // LUNA leaves mmceman unloaded while MX4SIO is enabled, so GameID cannot reach the card.
+  if(row==DEFAULTS_GAMEID)return (STORAGE_SETTINGS.enabled&MODE_MX4SIO)?
+      "Turn off MX4SIO in Storage to use GameID.":"MMCE cards switch per game. In-game return restores boot card.";
+  return row==DEFAULTS_CORE?"Default game core. Each game can override it.":"Default PS2 startup logo. Each game can override it.";
 }
 static void defaultsAdjust(void *context,int row,int direction) {
   DefaultsEditor *s=context;(void)direction;
-  int result=row?saveGameCoreOpl(s->target,!s->core):savePS2LogoEnabled(s->target,!s->logo);
+  int result=row==DEFAULTS_GAMEID?mmceGameIdSave(!s->gameId):
+      row==DEFAULTS_CORE?saveGameCoreOpl(s->target,!s->core):savePS2LogoEnabled(s->target,!s->logo);
   if(result)s->error="Could not save global settings";
-  else {if(row)s->core^=1;else s->logo^=1;s->error=NULL;}
+  else {
+    if(row==DEFAULTS_GAMEID)s->gameId^=1;else if(row==DEFAULTS_CORE)s->core^=1;else s->logo^=1;
+    s->error=NULL;
+  }
 }
 static void defaultsSubmenuBegin(void *context) {
   DefaultsEditor *state=context;
   state->logo=loadPS2LogoEnabled(state->target);state->core=loadGameCoreOpl(state->target);
+  state->gameId=mmceGameIdEnabled();
   state->error=NULL;state->selected=0;
   state->focus=(LunaCubePageFocus){.selected=-1,.glideMs=150};
 }
 static void defaultsSubmenuDraw(void *context,float opacity) {
   DefaultsEditor *state=context;
-  LunaCubePage page={.title="Game Defaults",.count=2,.label=defaultsLabel,
+  LunaCubePage page={.title="Game Defaults",.count=DEFAULTS_COUNT,.label=defaultsLabel,
     .value=defaultsValue,.description=defaultsDescription,.adjust=defaultsAdjust,.context=state};
   uiCubeSubmenuPageDraw(&page,state->selected,&state->focus,opacity);
 }
 static int defaultsSubmenuInput(void *context,int input) {
   DefaultsEditor *state=context;
   if(input&(PAD_CIRCLE|PAD_TRIANGLE|PAD_START))return LUNA_CUBE_SUBMENU_BACK;
-  if(input&(PAD_UP|PAD_L1|PAD_DOWN|PAD_R1))state->selected^=1;
+  if(input&(PAD_UP|PAD_L1))state->selected=(state->selected+DEFAULTS_COUNT-1)%DEFAULTS_COUNT;
+  else if(input&(PAD_DOWN|PAD_R1))state->selected=(state->selected+1)%DEFAULTS_COUNT;
   else if(input&(PAD_LEFT|PAD_RIGHT|PAD_CROSS))
     defaultsAdjust(state,state->selected,input&PAD_LEFT?-1:1);
   return LUNA_CUBE_SUBMENU_STAY;

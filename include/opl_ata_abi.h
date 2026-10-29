@@ -103,6 +103,7 @@ typedef struct {
   int EnablePadEmuOp, PadEmuSettings, PadMacroSettings;
   int EnableGSMOp;
   OplGsmConfig GsmConfig;
+  char LunaMmceIgrSlots[4]; // mmceigr slot mask for the IGR boot-card restore
 } OplEeCoreConfig;
 
 #endif

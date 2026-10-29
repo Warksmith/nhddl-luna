@@ -14,6 +14,7 @@ set(IRX_FILES
     usbd_mini
     usbmass_bd_mini
     mx4sio_bd_mini
+    mmceigr
     iLinkman
     IEEE1394_bd_mini
     ps2hdd-bdm

@@ -182,7 +182,7 @@ void launchTitleWithCheatProgress(Target *target, ArgumentList *arguments,
   if (target->device->sync)
     target->device->sync();
 
-  mmceMountVMC(target->id);
+  mmceMountVMC(target->id, 0);
 
   // Append bsd and ISO path
   appendArgument(arguments, newArgument(bsdArgument, bsdValue));
@@ -191,8 +191,16 @@ void launchTitleWithCheatProgress(Target *target, ArgumentList *arguments,
     appendArgument(arguments, newArgument("udpfs_ip", LAUNCHER_OPTIONS.udpfsIp));
   Argument *disableIgr = getArgument(arguments, "luna_neutrino_disable_igr");
   if (LAUNCHER_OPTIONS.returnPath[0] != '\0' &&
-      (disableIgr == NULL || disableIgr->isDisabled))
+      (disableIgr == NULL || disableIgr->isDisabled)) {
     appendArgument(arguments, newArgument(igrArgument, LAUNCHER_OPTIONS.returnPath));
+    // Neutrino switches the launcher's own card after reading its files;
+    // its IGR returns the card to the boot card before reloading LUNA.
+    int mmceSlot = mmceLauncherSlot();
+    char mmceGameId[40];
+    if (mmceSlot >= 0 && target->id[0] &&
+        snprintf(mmceGameId, sizeof(mmceGameId), "%d:%s", mmceSlot, target->id) < (int)sizeof(mmceGameId))
+      appendArgument(arguments, newArgument("mmce_gameid", mmceGameId));
+  }
   // Use quickboot to reduce load times (except for HDL mode because it requires hdlfs module)
   if (target->device->mode != MODE_HDL)
     appendArgument(arguments, newArgument("qb", ""));

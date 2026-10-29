@@ -211,6 +211,7 @@ int argInit() {
     return -EIO;
 
   lunaLanguageConfigure(cwdPath);
+  mmceGameIdConfigure(cwdPath);
 
   // Search for neutrino.elf
   getcwd(cwdPath, PATH_MAX + 1);
@@ -257,6 +258,7 @@ int init(char *elfPath) {
   }
 
   lunaLanguageConfigure(elfPath);
+  mmceGameIdConfigure(elfPath);
 
   // Search for neutrino.elf
   res = findNeutrinoELF(elfPath);
