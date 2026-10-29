@@ -1733,6 +1733,12 @@ int uiLaunchTitleWithCheats(Target *target, ArgumentList *arguments,
     return 0;
   }
   uiPlayLaunchTransition();
+  // Stop artwork workers so their reads do not compete with the launch's own
+  // storage access (each one is a network round trip on UDPFS).
+  gsKit_queue_exec(gsGlobal);
+  gsKit_finish();
+  dmaKit_wait_fast();
+  artCacheShutdown();
   closePad();
 
   // Keep the black framebuffer resident while Neutrino loads.

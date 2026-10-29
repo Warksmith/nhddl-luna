@@ -33,31 +33,48 @@ static int settingsPath(Target *target, char *path, size_t size) {
   return buildConfigFilePath(path, size, root, filename);
 }
 
-static int missingSettingsFile(const char *root, const char *path) {
+// Result of readSettingsPath() when the file could not be opened; the caller
+// decides between -ENOENT and -EIO with missingSettingsFiles().
+#define SETTINGS_OPEN_FAILED 1
+
+static void setMissingResults(int results[2], int result) {
+  results[0] = result;
+  results[1] = result;
+}
+
+// Sets results[0] for path and results[1] for its .bak copy, from one
+// directory listing: each entry is a request on network devices.
+static void missingSettingsFiles(const char *root, const char *path, int results[2]) {
   // PS2 file drivers do not consistently translate missing fopen paths into
   // POSIX ENOENT. Check directory entries instead of trusting a stale errno.
   char directory[PATH_MAX + 1];
   snprintf(directory, sizeof(directory), "%s", path);
   char *slash = strrchr(directory, '/');
-  if (!slash) return -EIO;
+  if (!slash) { setMissingResults(results, -EIO); return; }
   *slash = 0;
   const char *filename = strrchr(path, '/') + 1;
+  char backupName[PATH_MAX + 8];
+  snprintf(backupName, sizeof(backupName), "%s.bak", filename);
   DIR *dir = opendir(directory);
   if (dir) {
-    int found = 0;
+    int found[2] = {0, 0};
     struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL)
-      if (!strcasecmp(entry->d_name, filename)) { found = 1; break; }
+    while ((entry = readdir(dir)) != NULL && !(found[0] && found[1])) {
+      if (!strcasecmp(entry->d_name, filename)) found[0] = 1;
+      if (!strcasecmp(entry->d_name, backupName)) found[1] = 1;
+    }
     closedir(dir);
-    return found ? -EIO : -ENOENT;
+    results[0] = found[0] ? -EIO : -ENOENT;
+    results[1] = found[1] ? -EIO : -ENOENT;
+    return;
   }
   // The entire /LUNA directory may be absent on a first-time installation.
   char rootPath[PATH_MAX + 1];
   int n = snprintf(rootPath, sizeof(rootPath), "%s%s", root,
                    root[strlen(root) - 1] == '/' ? "" : "/");
-  if (n < 0 || (size_t)n >= sizeof(rootPath)) return -ENAMETOOLONG;
+  if (n < 0 || (size_t)n >= sizeof(rootPath)) { setMissingResults(results, -ENAMETOOLONG); return; }
   dir = opendir(rootPath);
-  if (!dir) return -EIO;
+  if (!dir) { setMissingResults(results, -EIO); return; }
   const char *folder = strrchr(directory, '/');
   folder = folder ? folder + 1 : directory;
   int found = 0;
@@ -65,13 +82,12 @@ static int missingSettingsFile(const char *root, const char *path) {
   while ((entry = readdir(dir)) != NULL)
     if (!strcasecmp(entry->d_name, folder)) { found = 1; break; }
   closedir(dir);
-  return found ? -EIO : -ENOENT;
+  setMissingResults(results, found ? -EIO : -ENOENT);
 }
 
-static int readSettingsPath(const char *root, const char *path,
-                             LunaCheatSettings *settings) {
+static int readSettingsPath(const char *path, LunaCheatSettings *settings) {
   FILE *stream = fopen(path, "rb");
-  if (!stream) return missingSettingsFile(root, path);
+  if (!stream) return SETTINGS_OPEN_FAILED;
   int result = lunaCheatSettingsRead(stream, settings);
   fclose(stream);
   return result;
@@ -132,12 +148,18 @@ int lunaCheatsLoadSettings(Target *target, LunaCheatSettings *settings) {
   int result = settingsPath(target, path, sizeof(path));
   if (result) return result;
   const char *root = metadataRoot(target);
-  result = readSettingsPath(root, path, settings);
+  result = readSettingsPath(path, settings);
   if (!result) return 0;
   char backup[PATH_MAX + 8];
   snprintf(backup, sizeof(backup), "%s.bak", path);
-  int fallback = readSettingsPath(root, backup, settings);
+  int fallback = readSettingsPath(backup, settings);
   if (!fallback) return 0;
+  if (result == SETTINGS_OPEN_FAILED || fallback == SETTINGS_OPEN_FAILED) {
+    int missing[2];
+    missingSettingsFiles(root, path, missing);
+    if (result == SETTINGS_OPEN_FAILED) result = missing[0];
+    if (fallback == SETTINGS_OPEN_FAILED) fallback = missing[1];
+  }
   return result == -ENOENT && fallback == -ENOENT ? 0 : result;
 }
 

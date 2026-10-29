@@ -129,12 +129,15 @@ void mmceMountVMC(char *titleID, int switchLauncherCard) {
       continue;
     }
 
-    // Poll MMCE status until busy bit is clear
-    for (int i = 0; i < 15; i++) {
-      sleep(1);
+    // Poll MMCE status until busy bit is clear. The switch usually completes
+    // at once, so check every 20 ms (after 100 ms for the busy bit to be set)
+    // instead of every second, still giving up after 15 seconds.
+    usleep(100000);
+    for (int i = 0; i < 745; i++) {
       if ((fileXioDevctl(mmceMountpoint, 0x2, NULL, 0, NULL, 0) & 1) == 0) {
         break;
       }
+      usleep(20000);
     }
   }
 }

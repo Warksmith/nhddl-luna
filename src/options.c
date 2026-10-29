@@ -461,9 +461,6 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
                          : buildLegacyConfigFilePath(directoryPath, sizeof(directoryPath), device->mountpoint, NULL);
     if (pathResult)
       return pathResult;
-    DIR *directory = opendir(directoryPath);
-    if (directory == NULL)
-      continue;
 
     // Older configs may use a longer prefix than the displayed ISO name.
     // Prefer the exact filename, including its recovery copy when present.
@@ -474,7 +471,22 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
       snprintf(setName, sizeof(setName), "PS1SET-%s", target->discs->key);
     const char *configName = target->discs && target->discs->key[0] ? setName : target->name;
     size_t nameLength = strlen(configName);
-    while ((entry = readdir(directory)) != NULL) {
+    // Open the exact name first: listing the directory costs one request per
+    // entry on network devices, and the listing would choose this file anyway.
+    for (int bak = 0; bak < 2 && filename[0] == '\0'; bak++) {
+      if (snprintf(targetPath, sizeof(targetPath), "%s/%s.yaml%s", directoryPath, configName,
+                   bak ? ".bak" : "") >= sizeof(targetPath))
+        break;
+      FILE *exact = fopen(targetPath, "rb");
+      if (exact != NULL) {
+        fclose(exact);
+        snprintf(filename, sizeof(filename), "%s.yaml", configName);
+      }
+    }
+    DIR *directory = filename[0] == '\0' ? opendir(directoryPath) : NULL;
+    if (directory == NULL && filename[0] == '\0')
+      continue;
+    while (directory != NULL && (entry = readdir(directory)) != NULL) {
       size_t entryLength = strlen(entry->d_name);
       if (entryLength >= 9 && !strcmp(entry->d_name + entryLength - 9, ".yaml.bak"))
         entryLength -= 4;
@@ -491,7 +503,8 @@ int getTitleLaunchArguments(ArgumentList *result, Target *target) {
       if (entryLength == nameLength + 5 && entry->d_name[nameLength] == '.')
         break;
     }
-    closedir(directory);
+    if (directory != NULL)
+      closedir(directory);
     if (filename[0] == '\0')
       continue;
     if (snprintf(targetPath, sizeof(targetPath), "%s/%s", directoryPath, filename) >= sizeof(targetPath))
