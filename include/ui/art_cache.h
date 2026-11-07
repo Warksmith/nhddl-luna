@@ -20,6 +20,8 @@ extern GSTEXTURE *orbsLogoTextures[ORBS_LOGO_CACHE_COUNT];
 extern uint8_t orbsLogoLoaded[ORBS_LOGO_CACHE_COUNT];
 
 int artCacheInit(void);
+// Join artwork workers while retaining cached textures for launch progress.
+void artCacheStopWorkers(void);
 void artCacheShutdown(void);
 int loadCoverArt(struct DeviceMapEntry *device, char *titleID);
 int loadNextClassicCoverArt(struct DeviceMapEntry *device, char *titleID);
