@@ -11,6 +11,7 @@
 #include "ui/wallpapers.h"
 #include "ui/underground.h"
 #include "ui/art_cache.h"
+#include "ui/frame_sync.h"
 #include "ui/file_manager.h"
 #include "ui/ring_menu.h"
 #include "ui/cube_menu.h"
@@ -322,6 +323,7 @@ int uiInit() {
 // Invalidates currently loaded texture and loads a new one
 // Frees textures and deinits gsKit
 void closeUI() {
+  closeClassicFrameSync();
   if (gsGlobal == NULL)
     return;
   uiCubePanelGlassClose();
@@ -938,7 +940,10 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     }
     gsKit_queue_exec(gsGlobal);
     gsKit_finish();
-    gsKit_sync_flip(gsGlobal);
+    if (view == UI_VIEW_CLASSIC)
+      syncClassicFrame(gsGlobal);
+    else
+      gsKit_sync_flip(gsGlobal);
     if (view == UI_VIEW_CLASSIC)
       classicEntryFirstFramePending = 0;
     if (lunaNavIsCollection(view) && psbbnAnimationTargetIdx >= 0 &&
@@ -1669,6 +1674,7 @@ static void drawPsxDiscSwapMessage(const Target *target,int startDisc) {
 }
 int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection,
                      ArgumentList *arguments) {
+  closeClassicFrameSync();
   char error[192];int createCards=0;
   ArgumentList saved={0};
   if(!arguments) {
@@ -1705,6 +1711,9 @@ int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection,
 
 int uiLaunchTitleWithCheats(Target *target, ArgumentList *arguments,
                            const LunaCheatSettings *cheats) {
+  // Executing another ELF must not retain our interrupt handler. A cancelled
+  // launch recreates it lazily on the next List frame.
+  closeClassicFrameSync();
 #ifdef LUNA_ENABLE_PSXCORE
   if(target && target->platform==TARGET_PS1)return uiLaunchPs1Cards(target,NULL,arguments);
 #endif
