@@ -26,9 +26,14 @@ void artCacheShutdown(void);
 int loadCoverArt(struct DeviceMapEntry *device, char *titleID);
 int loadNextClassicCoverArt(struct DeviceMapEntry *device, char *titleID);
 int loadDiscArt(struct DeviceMapEntry *device, char *titleID);
-int requestClassicArt(struct DeviceMapEntry *device, char *titleID);
+int requestClassicArt(struct DeviceMapEntry *device, char *titleID, int foreground);
 void pumpClassicArtPrefetch(void);
-int serviceClassicArt(int *coverAvailable, int *discAvailable);
+// Cover/disc updates are independent; COMPLETE ends the current request.
+#define CLASSIC_ART_COVER_READY 1
+#define CLASSIC_ART_DISC_READY 2
+#define CLASSIC_ART_COMPLETE 4
+// allowIO gates new reads only; cached covers and completed jobs stay available.
+int serviceClassicArt(int *coverAvailable, int *discAvailable, int allowIO);
 void cancelClassicArt(void);
 void releaseClassicArtVRAM(void);
 void releasePSBBNCovers(void);

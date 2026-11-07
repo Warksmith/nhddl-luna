@@ -81,6 +81,7 @@ static volatile int classicArtStopping;
 static uint8_t classicArtStack[16384] __attribute__((aligned(16)));
 static volatile uint32_t classicArtGeneration;
 static volatile int classicArtPending;
+static int classicArtNeedCover, classicArtNeedDisc, classicArtForeground;
 static char classicCoverPath[255];
 static char classicDiscPath[255];
 static struct {
@@ -92,7 +93,20 @@ static struct {
   GSTEXTURE disc;
   int coverResult;
   int discResult;
+  int kind;
+  volatile int cancelled;
 } classicArtJob;
+#define CLASSIC_COVER_CACHE_COUNT 8
+#define CLASSIC_COVER_CACHE_BYTES (2U * 1024U * 1024U)
+// UI-owned copies only: workers never touch the cache or a displayed texture.
+static struct {
+  char path[255];
+  GSTEXTURE texture;
+  size_t bytes;
+  uint64_t used;
+} classicCoverCache[CLASSIC_COVER_CACHE_COUNT];
+static size_t classicCoverCacheBytes;
+static uint64_t classicCoverCacheClock;
 static int collectionArtThreadId = -1;
 static int collectionArtForeground;
 static int collectionArtWakeSema = -1;
@@ -360,7 +374,7 @@ int artCacheInit(void) {
     classicThread.stack = classicArtStack;
     classicThread.stack_size = sizeof(classicArtStack);
     classicThread.gp_reg = &_gp;
-    // Stay below the UI thread so decoding never interrupts a drawn frame.
+    // Artwork must always yield to the UI thread (priority 0x20).
     classicThread.initial_priority = 0x21;
     classicArtStopping = 0;
     classicArtThreadId = CreateThread(&classicThread);
@@ -521,6 +535,84 @@ int loadDiscArt(struct DeviceMapEntry *device, char *titleID) {
   return 0;
 }
 
+static int findClassicCover(const char *path) {
+  for (int i = 0; i < CLASSIC_COVER_CACHE_COUNT; i++)
+    if (classicCoverCache[i].texture.Mem != NULL &&
+        !strcmp(classicCoverCache[i].path, path))
+      return i;
+  return -1;
+}
+
+static void discardClassicCover(int slot) {
+  classicCoverCacheBytes -= classicCoverCache[slot].bytes;
+  free(classicCoverCache[slot].texture.Mem);
+  memset(&classicCoverCache[slot], 0, sizeof(classicCoverCache[slot]));
+}
+
+static void clearClassicCoverCache(void) {
+  for (int i = 0; i < CLASSIC_COVER_CACHE_COUNT; i++)
+    discardClassicCover(i);
+  classicCoverCacheClock = 0;
+}
+
+static int copyClassicCover(const char *path, GSTEXTURE *texture) {
+  int slot = findClassicCover(path);
+  if (slot < 0)
+    return 0;
+  void *pixels = memalign(128, classicCoverCache[slot].bytes);
+  if (pixels == NULL)
+    return 0;
+  memcpy(pixels, classicCoverCache[slot].texture.Mem, classicCoverCache[slot].bytes);
+  *texture = classicCoverCache[slot].texture;
+  texture->Mem = pixels;
+  classicCoverCache[slot].used = ++classicCoverCacheClock;
+  return 1;
+}
+
+static void rememberClassicCover(const char *path, const GSTEXTURE *texture) {
+  if (texture->Mem == NULL || texture->Clut != NULL || texture->PSM != GS_PSM_CT32 ||
+      texture->Width <= 0 || texture->Height <= 0 ||
+      strlen(path) >= sizeof(classicCoverCache[0].path))
+    return;
+  int existing = findClassicCover(path);
+  if (existing >= 0) {
+    classicCoverCache[existing].used = ++classicCoverCacheClock;
+    return;
+  }
+  size_t bytes = gsKit_texture_size(texture->Width, texture->Height, texture->PSM);
+  if (bytes == 0 || bytes > CLASSIC_COVER_CACHE_BYTES)
+    return;
+  int slot;
+  for (;;) {
+    slot = -1;
+    int oldest = -1;
+    for (int i = 0; i < CLASSIC_COVER_CACHE_COUNT; i++) {
+      if (classicCoverCache[i].texture.Mem == NULL) {
+        slot = i;
+      } else if (oldest < 0 || classicCoverCache[i].used < classicCoverCache[oldest].used) {
+        oldest = i;
+      }
+    }
+    if (slot >= 0 && classicCoverCacheBytes <= CLASSIC_COVER_CACHE_BYTES - bytes)
+      break;
+    if (oldest < 0)
+      return;
+    discardClassicCover(oldest);
+  }
+  void *pixels = memalign(128, bytes);
+  if (pixels == NULL)
+    return; // Keep displaying the decoded cover even when caching cannot allocate.
+  memcpy(pixels, texture->Mem, bytes);
+  strcpy(classicCoverCache[slot].path, path);
+  classicCoverCache[slot].texture = *texture;
+  classicCoverCache[slot].texture.Mem = pixels;
+  classicCoverCache[slot].texture.Vram = classicCoverCache[slot].texture.VramClut = 0;
+  classicCoverCache[slot].texture.Delayed = 1;
+  classicCoverCache[slot].bytes = bytes;
+  classicCoverCache[slot].used = ++classicCoverCacheClock;
+  classicCoverCacheBytes += bytes;
+}
+
 static void clearClassicArtJob(void) {
   free(classicArtJob.cover.Mem);
   free(classicArtJob.cover.Clut);
@@ -536,32 +628,23 @@ static void classicArtWorker(void) {
     WaitSema(classicArtWakeSema);
     if (classicArtStopping)
       break;
-    classicArtJob.coverResult = decodePNGTextureRGBA(gsGlobal, &classicArtJob.cover,
-                                                     classicArtJob.coverPath);
-    if (!classicArtPending || classicArtJob.generation != classicArtGeneration) {
-      clearClassicArtJob();
-      continue;
+    GSTEXTURE *texture = classicArtJob.kind == CLASSIC_ART_COVER_READY ?
+        &classicArtJob.cover : &classicArtJob.disc;
+    const char *path = classicArtJob.kind == CLASSIC_ART_COVER_READY ?
+        classicArtJob.coverPath : classicArtJob.discPath;
+    int result = decodeCollectionPNGTextureRGBA(gsGlobal, texture, path,
+                                               &classicArtJob.cancelled);
+    if (result != 0 || texture->Mem == NULL || texture->Width <= 0 || texture->Height <= 0) {
+      free(texture->Mem);
+      free(texture->Clut);
+      memset(texture, 0, sizeof(*texture));
+      result = -1;
     }
-    classicArtJob.discResult = decodePNGTextureRGBA(gsGlobal, &classicArtJob.disc,
-                                                    classicArtJob.discPath);
-    if (classicArtJob.coverResult != 0 || classicArtJob.cover.Mem == NULL ||
-        classicArtJob.cover.Width <= 0 || classicArtJob.cover.Height <= 0) {
-      free(classicArtJob.cover.Mem);
-      free(classicArtJob.cover.Clut);
-      memset(&classicArtJob.cover, 0, sizeof(classicArtJob.cover));
-      classicArtJob.coverResult = -1;
-    }
-    if (classicArtJob.discResult != 0 || classicArtJob.disc.Mem == NULL ||
-        classicArtJob.disc.Width <= 0 || classicArtJob.disc.Height <= 0) {
-      free(classicArtJob.disc.Mem);
-      free(classicArtJob.disc.Clut);
-      memset(&classicArtJob.disc, 0, sizeof(classicArtJob.disc));
-      classicArtJob.discResult = -1;
-    }
-    if (!classicArtPending || classicArtJob.generation != classicArtGeneration) {
-      clearClassicArtJob();
-      continue;
-    }
+    if (classicArtJob.kind == CLASSIC_ART_COVER_READY)
+      classicArtJob.coverResult = result;
+    else
+      classicArtJob.discResult = result;
+    // Publish one asset at a time. A slow/missing disc cannot hold up a cover.
     __asm__ __volatile__("" ::: "memory");
     classicArtJob.state = 2;
   }
@@ -585,57 +668,84 @@ static void stopClassicArtWorker(void) {
   clearClassicArtJob();
 }
 
+static void prioritizeClassicArtJob(void) {
+  if (classicArtThreadId >= 0)
+    // Lower numbers run first. Even the selected cover stays below the UI;
+    // a complete PNG decode must never monopolize rendering or input polling.
+    (void)ChangeThreadPriority(classicArtThreadId,
+        classicArtForeground ? 0x21 : 0x22);
+}
+
 static void queueClassicArtJob(void) {
   classicArtJob.generation = classicArtGeneration;
+  classicArtJob.kind = classicArtNeedCover ? CLASSIC_ART_COVER_READY : CLASSIC_ART_DISC_READY;
+  classicArtJob.cancelled = 0;
   snprintf(classicArtJob.coverPath, sizeof(classicArtJob.coverPath), "%s", classicCoverPath);
   snprintf(classicArtJob.discPath, sizeof(classicArtJob.discPath), "%s", classicDiscPath);
   classicArtJob.state = 1;
+  prioritizeClassicArtJob();
   SignalSema(classicArtWakeSema);
 }
 
-int requestClassicArt(struct DeviceMapEntry *device, char *titleID) {
+int requestClassicArt(struct DeviceMapEntry *device, char *titleID, int foreground) {
   char coverPath[sizeof(classicCoverPath)];
   char discPath[sizeof(classicDiscPath)];
-  int coverLength;
-  int discLength;
   if (classicArtThreadId < 0 || device == NULL || titleID == NULL)
     return -1;
   if (device->metadev)
     device = device->metadev;
   if (device->mountpoint == NULL)
     return -1;
-  coverLength = snprintf(coverPath, sizeof(coverPath), "%s%s/%s_COV.png",
-                         device->mountpoint, artPath, titleID);
-  discLength = snprintf(discPath, sizeof(discPath), "%s%s/%s_ICO.png",
-                        device->mountpoint, artPath, titleID);
+  int coverLength = snprintf(coverPath, sizeof(coverPath), "%s%s/%s_COV.png",
+                             device->mountpoint, artPath, titleID);
+  int discLength = snprintf(discPath, sizeof(discPath), "%s%s/%s_ICO.png",
+                            device->mountpoint, artPath, titleID);
   if (coverLength < 0 || coverLength >= (int)sizeof(coverPath) ||
       discLength < 0 || discLength >= (int)sizeof(discPath))
     return -1;
-  // Keep a decoded prefetch when Classic requests the same title on entry.
+  classicArtForeground = foreground != 0;
+  // A visible cover takes precedence over hidden Collection preloads.
+  if (foreground && !collectionArtForeground) {
+    if (collectionArtJob.state == 1) collectionArtJob.cancelled = 1;
+    if (collectionFarArtJob.state == 1) collectionFarArtJob.cancelled = 1;
+  }
+  // Retain an in-flight/finished cover prefetched for entry into List.
   if (classicArtPending && !strcmp(classicCoverPath, coverPath) &&
-      !strcmp(classicDiscPath, discPath))
+      !strcmp(classicDiscPath, discPath)) {
+    if (foreground) classicArtNeedDisc = 1;
+    prioritizeClassicArtJob();
     return 0;
-  if (classicArtJob.state == 2)
-    clearClassicArtJob();
+  }
+  if (classicArtJob.state == 1)
+    classicArtJob.cancelled = 1;
   strcpy(classicCoverPath, coverPath);
   strcpy(classicDiscPath, discPath);
   classicArtGeneration++;
-  classicArtPending = 1;
-  if (classicArtJob.state == 0)
-    queueClassicArtJob();
+  classicArtPending = classicArtNeedCover = 1;
+  classicArtNeedDisc = foreground != 0;
+  // The UI services cache hits before starting any new file I/O.
   return 0;
 }
 
 void pumpClassicArtPrefetch(void) {
-  if (classicArtPending && classicArtJob.state == 0)
+  if (classicArtJob.state == 2) {
+    if (classicArtJob.kind == CLASSIC_ART_COVER_READY && classicArtJob.coverResult == 0)
+      rememberClassicCover(classicArtJob.coverPath, &classicArtJob.cover);
+    // Leave a matching result ready for List entry, including failed decodes.
+    if (classicArtPending && classicArtJob.generation == classicArtGeneration)
+      return;
+    clearClassicArtJob();
+  }
+  if (classicArtPending && classicArtJob.state == 0 && findClassicCover(classicCoverPath) < 0)
     queueClassicArtJob();
 }
 
 void cancelClassicArt(void) {
   classicArtGeneration++;
   classicArtPending = 0;
-  if (classicArtJob.state == 2)
-    clearClassicArtJob();
+  if (classicArtJob.state == 1)
+    classicArtJob.cancelled = 1;
+  // Finished results remain UI-owned until serviced, prefetched or shut down.
 }
 
 static void adoptClassicTexture(GSTEXTURE *destination, GSTEXTURE *decoded) {
@@ -649,27 +759,51 @@ static void adoptClassicTexture(GSTEXTURE *destination, GSTEXTURE *decoded) {
   destination->VramClut = 0;
 }
 
-int serviceClassicArt(int *coverAvailable, int *discAvailable) {
-  int finished = 0;
+int serviceClassicArt(int *coverAvailable, int *discAvailable, int allowIO) {
+  int updated = 0;
   if (classicArtJob.state == 2) {
     __asm__ __volatile__("" ::: "memory");
+    if (classicArtJob.kind == CLASSIC_ART_COVER_READY && classicArtJob.coverResult == 0)
+      rememberClassicCover(classicArtJob.coverPath, &classicArtJob.cover);
     if (classicArtPending && classicArtJob.generation == classicArtGeneration) {
-      GSTEXTURE *previous = coverTexture;
-      *coverAvailable = classicArtJob.coverResult == 0;
-      *discAvailable = classicArtJob.discResult == 0;
-      adoptClassicTexture(classicPreviousCoverTexture, &classicArtJob.cover);
-      coverTexture = classicPreviousCoverTexture;
-      classicPreviousCoverTexture = previous;
-      adoptClassicTexture(discTexture, &classicArtJob.disc);
-      discTexture->Filter = GS_FILTER_LINEAR;
-      classicArtPending = 0;
-      finished = 1;
+      if (classicArtJob.kind == CLASSIC_ART_COVER_READY && classicArtNeedCover) {
+        GSTEXTURE *previous = coverTexture;
+        *coverAvailable = classicArtJob.coverResult == 0;
+        adoptClassicTexture(classicPreviousCoverTexture, &classicArtJob.cover);
+        coverTexture = classicPreviousCoverTexture;
+        classicPreviousCoverTexture = previous;
+        classicArtNeedCover = 0;
+        updated |= CLASSIC_ART_COVER_READY;
+      } else if (classicArtJob.kind == CLASSIC_ART_DISC_READY && classicArtNeedDisc) {
+        *discAvailable = classicArtJob.discResult == 0;
+        adoptClassicTexture(discTexture, &classicArtJob.disc);
+        discTexture->Filter = GS_FILTER_LINEAR;
+        classicArtNeedDisc = 0;
+        updated |= CLASSIC_ART_DISC_READY;
+      }
     }
     clearClassicArtJob();
   }
-  if (classicArtPending && classicArtJob.state == 0)
+  // This can finish immediately even while an obsolete disc read winds down.
+  GSTEXTURE cached = {0};
+  if (classicArtPending && classicArtNeedCover && copyClassicCover(classicCoverPath, &cached)) {
+    GSTEXTURE *previous = coverTexture;
+    adoptClassicTexture(classicPreviousCoverTexture, &cached);
+    coverTexture = classicPreviousCoverTexture;
+    classicPreviousCoverTexture = previous;
+    *coverAvailable = 1;
+    classicArtNeedCover = 0;
+    updated |= CLASSIC_ART_COVER_READY;
+  }
+  if (classicArtPending && !classicArtNeedCover && !classicArtNeedDisc) {
+    classicArtPending = 0;
+    updated |= CLASSIC_ART_COMPLETE;
+  }
+  // Cache hits and finished jobs remain available during navigation. Start
+  // fresh cover/disc reads only when the UI says the selection has settled.
+  if (allowIO && classicArtPending && classicArtJob.state == 0)
     queueClassicArtJob();
-  return finished;
+  return updated;
 }
 
 static void releasePSBBNCoverCacheEntry(int cacheIdx) {
@@ -2742,6 +2876,8 @@ void artCacheShutdown(void) {
   clearOrbitCoverHandoffs();
   artCacheStopWorkers();
   releaseOrbsArt();
+  clearClassicCoverCache();
+  classicArtPending = classicArtNeedCover = classicArtNeedDisc = 0;
   collectionArtReuseClear(&collectionReuseCache);
   memset(collectionCoverKeys, 0, sizeof(collectionCoverKeys));
   collectionNavigationDirection = 0;

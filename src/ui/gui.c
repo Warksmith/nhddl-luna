@@ -11,6 +11,7 @@
 #include "ui/wallpapers.h"
 #include "ui/underground.h"
 #include "ui/art_cache.h"
+#include "ui/frame_sync.h"
 #include "ui/file_manager.h"
 #include "ui/ring_menu.h"
 #include "ui/cube_menu.h"
@@ -322,6 +323,7 @@ int uiInit() {
 // Invalidates currently loaded texture and loads a new one
 // Frees textures and deinits gsKit
 void closeUI() {
+  closeClassicFrameSync();
   if (gsGlobal == NULL)
     return;
   uiCubePanelGlassClose();
@@ -393,6 +395,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   int favoritesOnly = 0;
   int classicArtRequestedIdx = -1;
   int classicArtSubmittedIdx = -1;
+  uint32_t classicArtDueMs = 0;
   int classicEntryFirstFramePending = 0;
   Target *classicPrefetchCandidate = NULL;
   Target *classicPrefetchSubmitted = NULL;
@@ -407,7 +410,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   int classicArtOverlap = 0;
   int ambientEnabled = 0;
   uint32_t enabledViews = UI_VIEW_DEFAULT_MASK;
-  uint32_t classicArtDueMs = 0;
   LunaNavRepeatState classicRepeat = {0};
   LunaScrollFast scrollFast = {0};
   UILibraryView view = UI_VIEW_CLASSIC;
@@ -532,15 +534,12 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     psbbnCoverBaseIdx = -1;
   }
 
-  // Classic textures are unnecessary when restoring another view.
-  if (view == UI_VIEW_CLASSIC) {
-    isCoverUninitialized = loadCoverArt(curTarget->device, curTarget->id);
-    isDiscUninitialized = loadDiscArt(curTarget->device, curTarget->id);
-    classicDisplayedCoverAvailable = !isCoverUninitialized;
-    classicDisplayedDiscAvailable = !isDiscUninitialized;
-    classicDisplayedArtTarget = curTarget;
-    if (classicDisplayedDiscAvailable)
-      bindTextureSafe(gsGlobal, discTexture);
+  // Let the first frame and input run before artwork I/O, including at startup.
+  if (view == UI_VIEW_CLASSIC && titles->total > 0) {
+    isCoverUninitialized = isDiscUninitialized = 1;
+    classicArtRequestedIdx = selectedTitleIdx;
+    classicArtDueMs = uiNowMs();
+    classicEntryFirstFramePending = 1;
   }
 
   // Main UI loop
@@ -631,48 +630,46 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       }
       if (classicPrefetchSubmitted != curTarget &&
           (int32_t)(uiNowMs() - classicPrefetchDueMs) >= 0 &&
-          requestClassicArt(curTarget->device, curTarget->id) == 0)
+          requestClassicArt(curTarget->device, curTarget->id, 0) == 0)
         classicPrefetchSubmitted = curTarget;
       pumpClassicArtPrefetch();
     }
 
     if (view == UI_VIEW_CLASSIC && classicArtRequestedIdx == selectedTitleIdx &&
-        classicArtSubmittedIdx != selectedTitleIdx && !classicEntryFirstFramePending &&
-        !classicNavHeld &&
-        (int32_t)(uiNowMs() - classicArtDueMs) >= 0) {
-      if (requestClassicArt(curTarget->device, curTarget->id) == 0) {
+        classicArtSubmittedIdx != selectedTitleIdx && !classicEntryFirstFramePending) {
+      if (requestClassicArt(curTarget->device, curTarget->id, 1) == 0) {
         classicArtSubmittedIdx = selectedTitleIdx;
       } else {
-        // Keep the original loader available if the worker could not start.
-        isCoverUninitialized = loadNextClassicCoverArt(curTarget->device, curTarget->id);
-        isDiscUninitialized = loadDiscArt(curTarget->device, curTarget->id);
-        classicDisplayedCoverAvailable = !isCoverUninitialized;
-        classicDisplayedDiscAvailable = !isDiscUninitialized;
+        // A failed worker leaves placeholders, never blocking file I/O on the UI.
+        isCoverUninitialized = isDiscUninitialized = 1;
+        classicDisplayedCoverAvailable = classicDisplayedDiscAvailable = 0;
         classicDisplayedArtTarget = curTarget;
         classicArtRequestedIdx = -1;
-        // Upload artwork before text is queued so VRAM reuse cannot replace glyphs.
-        if (classicDisplayedCoverAvailable)
-          bindTextureSafe(gsGlobal, coverTexture);
-        if (classicDisplayedDiscAvailable)
-          bindTextureSafe(gsGlobal, discTexture);
       }
     }
     if (view == UI_VIEW_CLASSIC && classicArtSubmittedIdx == selectedTitleIdx) {
-      int coverAvailable;
-      int discAvailable;
-      if (serviceClassicArt(&coverAvailable, &discAvailable)) {
+      int coverAvailable = 0, discAvailable = 0;
+      const int allowArtIO = !classicNavHeld &&
+          (int32_t)(uiNowMs() - classicArtDueMs) >= 0;
+      int updated = serviceClassicArt(&coverAvailable, &discAvailable, allowArtIO);
+      if (updated & CLASSIC_ART_COVER_READY) {
         classicDisplayedCoverAvailable = coverAvailable;
-        classicDisplayedDiscAvailable = discAvailable;
+        classicDisplayedDiscAvailable = 0; // Never pair a new cover with an old disc.
         classicDisplayedArtTarget = curTarget;
         isCoverUninitialized = !coverAvailable;
-        isDiscUninitialized = !discAvailable;
-        classicArtRequestedIdx = -1;
-        classicArtSubmittedIdx = -1;
-        // Adopted textures must be resident before the frame draws its text.
+        isDiscUninitialized = 1;
         if (coverAvailable)
           bindTextureSafe(gsGlobal, coverTexture);
+      }
+      if (updated & CLASSIC_ART_DISC_READY) {
+        classicDisplayedDiscAvailable = discAvailable;
+        isDiscUninitialized = !discAvailable;
         if (discAvailable)
           bindTextureSafe(gsGlobal, discTexture);
+      }
+      if (updated & CLASSIC_ART_COMPLETE) {
+        classicArtRequestedIdx = -1;
+        classicArtSubmittedIdx = -1;
       }
     }
 
@@ -943,7 +940,10 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     }
     gsKit_queue_exec(gsGlobal);
     gsKit_finish();
-    gsKit_sync_flip(gsGlobal);
+    if (view == UI_VIEW_CLASSIC)
+      syncClassicFrame(gsGlobal);
+    else
+      gsKit_sync_flip(gsGlobal);
     if (view == UI_VIEW_CLASSIC)
       classicEntryFirstFramePending = 0;
     if (lunaNavIsCollection(view) && psbbnAnimationTargetIdx >= 0 &&
@@ -951,7 +951,8 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
             lunaNavDurationFrames(psbbnAnimationDuration,
                                   gsGlobal->Mode == GS_MODE_PAL ? 50 : 60))
       psbbnAnimationElapsedFrames++;
-    usleep(view == UI_VIEW_CLASSIC && classicArtSubmittedIdx >= 0 ? 3000 : 1000);
+    // Keep the normal frame yield even when artwork is pending.
+    usleep(1000);
 
     // Keep rendering after options close, while ignoring the Triangle press
     // that closed them until the button is released.
@@ -1378,8 +1379,8 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         classicDisplayedDiscAvailable = 0;
         classicArtRequestedIdx = selectedTitleIdx;
         classicArtDueMs = uiNowMs();
-        // Start decoding on entry; requestClassicArt keeps a matching prefetch.
-        if (requestClassicArt(curTarget->device, curTarget->id) == 0)
+        // Keep a matching prefetch; the frame loop services it asynchronously.
+        if (requestClassicArt(curTarget->device, curTarget->id, 1) == 0)
           classicArtSubmittedIdx = selectedTitleIdx;
         classicNavHeld = 0;
         classicRepeat.direction = 0;
@@ -1673,6 +1674,7 @@ static void drawPsxDiscSwapMessage(const Target *target,int startDisc) {
 }
 int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection,
                      ArgumentList *arguments) {
+  closeClassicFrameSync();
   char error[192];int createCards=0;
   ArgumentList saved={0};
   if(!arguments) {
@@ -1709,6 +1711,9 @@ int uiLaunchPs1Cards(Target *target, const struct LunaPsxVmcSettings *selection,
 
 int uiLaunchTitleWithCheats(Target *target, ArgumentList *arguments,
                            const LunaCheatSettings *cheats) {
+  // Executing another ELF must not retain our interrupt handler. A cancelled
+  // launch recreates it lazily on the next List frame.
+  closeClassicFrameSync();
 #ifdef LUNA_ENABLE_PSXCORE
   if(target && target->platform==TARGET_PS1)return uiLaunchPs1Cards(target,NULL,arguments);
 #endif
