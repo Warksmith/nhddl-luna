@@ -26,8 +26,12 @@ void artCacheShutdown(void);
 int loadCoverArt(struct DeviceMapEntry *device, char *titleID);
 int loadNextClassicCoverArt(struct DeviceMapEntry *device, char *titleID);
 int loadDiscArt(struct DeviceMapEntry *device, char *titleID);
-int requestClassicArt(struct DeviceMapEntry *device, char *titleID);
+int requestClassicArt(struct DeviceMapEntry *device, char *titleID, int foreground);
 void pumpClassicArtPrefetch(void);
+// Cover/disc updates are independent; COMPLETE ends the current request.
+#define CLASSIC_ART_COVER_READY 1
+#define CLASSIC_ART_DISC_READY 2
+#define CLASSIC_ART_COMPLETE 4
 int serviceClassicArt(int *coverAvailable, int *discAvailable);
 void cancelClassicArt(void);
 void releaseClassicArtVRAM(void);

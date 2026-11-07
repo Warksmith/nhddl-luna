@@ -407,7 +407,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   int classicArtOverlap = 0;
   int ambientEnabled = 0;
   uint32_t enabledViews = UI_VIEW_DEFAULT_MASK;
-  uint32_t classicArtDueMs = 0;
   LunaNavRepeatState classicRepeat = {0};
   LunaScrollFast scrollFast = {0};
   UILibraryView view = UI_VIEW_CLASSIC;
@@ -620,7 +619,6 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         isDiscUninitialized = 1;
         classicArtRequestedIdx = selectedTitleIdx;
         classicArtSubmittedIdx = -1;
-        classicArtDueMs = uiNowMs() + CLASSIC_ART_SETTLE_MS;
       }
     }
 
@@ -631,16 +629,14 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       }
       if (classicPrefetchSubmitted != curTarget &&
           (int32_t)(uiNowMs() - classicPrefetchDueMs) >= 0 &&
-          requestClassicArt(curTarget->device, curTarget->id) == 0)
+          requestClassicArt(curTarget->device, curTarget->id, 0) == 0)
         classicPrefetchSubmitted = curTarget;
       pumpClassicArtPrefetch();
     }
 
     if (view == UI_VIEW_CLASSIC && classicArtRequestedIdx == selectedTitleIdx &&
-        classicArtSubmittedIdx != selectedTitleIdx && !classicEntryFirstFramePending &&
-        !classicNavHeld &&
-        (int32_t)(uiNowMs() - classicArtDueMs) >= 0) {
-      if (requestClassicArt(curTarget->device, curTarget->id) == 0) {
+        classicArtSubmittedIdx != selectedTitleIdx && !classicEntryFirstFramePending) {
+      if (requestClassicArt(curTarget->device, curTarget->id, 1) == 0) {
         classicArtSubmittedIdx = selectedTitleIdx;
       } else {
         // Keep the original loader available if the worker could not start.
@@ -658,21 +654,26 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       }
     }
     if (view == UI_VIEW_CLASSIC && classicArtSubmittedIdx == selectedTitleIdx) {
-      int coverAvailable;
-      int discAvailable;
-      if (serviceClassicArt(&coverAvailable, &discAvailable)) {
+      int coverAvailable = 0, discAvailable = 0;
+      int updated = serviceClassicArt(&coverAvailable, &discAvailable);
+      if (updated & CLASSIC_ART_COVER_READY) {
         classicDisplayedCoverAvailable = coverAvailable;
-        classicDisplayedDiscAvailable = discAvailable;
+        classicDisplayedDiscAvailable = 0; // Never pair a new cover with an old disc.
         classicDisplayedArtTarget = curTarget;
         isCoverUninitialized = !coverAvailable;
-        isDiscUninitialized = !discAvailable;
-        classicArtRequestedIdx = -1;
-        classicArtSubmittedIdx = -1;
-        // Adopted textures must be resident before the frame draws its text.
+        isDiscUninitialized = 1;
         if (coverAvailable)
           bindTextureSafe(gsGlobal, coverTexture);
+      }
+      if (updated & CLASSIC_ART_DISC_READY) {
+        classicDisplayedDiscAvailable = discAvailable;
+        isDiscUninitialized = !discAvailable;
         if (discAvailable)
           bindTextureSafe(gsGlobal, discTexture);
+      }
+      if (updated & CLASSIC_ART_COMPLETE) {
+        classicArtRequestedIdx = -1;
+        classicArtSubmittedIdx = -1;
       }
     }
 
@@ -1377,9 +1378,8 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         classicDisplayedCoverAvailable = 0;
         classicDisplayedDiscAvailable = 0;
         classicArtRequestedIdx = selectedTitleIdx;
-        classicArtDueMs = uiNowMs();
         // Start decoding on entry; requestClassicArt keeps a matching prefetch.
-        if (requestClassicArt(curTarget->device, curTarget->id) == 0)
+        if (requestClassicArt(curTarget->device, curTarget->id, 1) == 0)
           classicArtSubmittedIdx = selectedTitleIdx;
         classicNavHeld = 0;
         classicRepeat.direction = 0;
