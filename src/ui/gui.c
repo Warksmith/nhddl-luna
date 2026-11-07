@@ -1748,6 +1748,12 @@ int uiLaunchTitleWithCheats(Target *target, ArgumentList *arguments,
     return 0;
   }
   uiPlayLaunchTransition();
+  // Join artwork reads before the loader uses storage. Keep cached textures
+  // alive for the remaining handoff frames and normal closeUI() cleanup.
+  gsKit_queue_exec(gsGlobal);
+  gsKit_finish();
+  dmaKit_wait_fast();
+  artCacheStopWorkers();
   closePad();
 
   // Keep the black framebuffer resident while Neutrino loads.

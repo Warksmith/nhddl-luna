@@ -2727,9 +2727,7 @@ void updatePSBBNCoverResidency(int flowOffset) {
   }
 }
 
-void artCacheShutdown(void) {
-  releaseCollectionCornerArt();
-  clearOrbitCoverHandoffs();
+void artCacheStopWorkers(void) {
   stopClassicArtWorker();
   stopCollectionFarArtWorker(NULL, 0);
   stopCollectionArtWorker();
@@ -2737,6 +2735,12 @@ void artCacheShutdown(void) {
   stopOrbitArtWorker();
   stopGridArtWorker();
   stopScrollArtWorker();
+}
+
+void artCacheShutdown(void) {
+  releaseCollectionCornerArt();
+  clearOrbitCoverHandoffs();
+  artCacheStopWorkers();
   releaseOrbsArt();
   collectionArtReuseClear(&collectionReuseCache);
   memset(collectionCoverKeys, 0, sizeof(collectionCoverKeys));
