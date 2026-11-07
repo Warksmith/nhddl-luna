@@ -374,7 +374,7 @@ int artCacheInit(void) {
     classicThread.stack = classicArtStack;
     classicThread.stack_size = sizeof(classicArtStack);
     classicThread.gp_reg = &_gp;
-    // Hidden preparation/disc work yields to the UI; visible covers are promoted.
+    // Artwork must always yield to the UI thread (priority 0x20).
     classicThread.initial_priority = 0x21;
     classicArtStopping = 0;
     classicArtThreadId = CreateThread(&classicThread);
@@ -670,8 +670,10 @@ static void stopClassicArtWorker(void) {
 
 static void prioritizeClassicArtJob(void) {
   if (classicArtThreadId >= 0)
+    // Lower numbers run first. Even the selected cover stays below the UI;
+    // a complete PNG decode must never monopolize rendering or input polling.
     (void)ChangeThreadPriority(classicArtThreadId,
-        classicArtForeground && classicArtJob.kind == CLASSIC_ART_COVER_READY ? 0x1f : 0x21);
+        classicArtForeground ? 0x21 : 0x22);
 }
 
 static void queueClassicArtJob(void) {
@@ -757,7 +759,7 @@ static void adoptClassicTexture(GSTEXTURE *destination, GSTEXTURE *decoded) {
   destination->VramClut = 0;
 }
 
-int serviceClassicArt(int *coverAvailable, int *discAvailable) {
+int serviceClassicArt(int *coverAvailable, int *discAvailable, int allowIO) {
   int updated = 0;
   if (classicArtJob.state == 2) {
     __asm__ __volatile__("" ::: "memory");
@@ -797,7 +799,9 @@ int serviceClassicArt(int *coverAvailable, int *discAvailable) {
     classicArtPending = 0;
     updated |= CLASSIC_ART_COMPLETE;
   }
-  if (classicArtPending && classicArtJob.state == 0)
+  // Cache hits and finished jobs remain available during navigation. Start
+  // fresh cover/disc reads only when the UI says the selection has settled.
+  if (allowIO && classicArtPending && classicArtJob.state == 0)
     queueClassicArtJob();
   return updated;
 }
