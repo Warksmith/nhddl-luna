@@ -393,6 +393,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
   int favoritesOnly = 0;
   int classicArtRequestedIdx = -1;
   int classicArtSubmittedIdx = -1;
+  uint32_t classicArtDueMs = 0;
   int classicEntryFirstFramePending = 0;
   Target *classicPrefetchCandidate = NULL;
   Target *classicPrefetchSubmitted = NULL;
@@ -531,15 +532,12 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
     psbbnCoverBaseIdx = -1;
   }
 
-  // Classic textures are unnecessary when restoring another view.
-  if (view == UI_VIEW_CLASSIC) {
-    isCoverUninitialized = loadCoverArt(curTarget->device, curTarget->id);
-    isDiscUninitialized = loadDiscArt(curTarget->device, curTarget->id);
-    classicDisplayedCoverAvailable = !isCoverUninitialized;
-    classicDisplayedDiscAvailable = !isDiscUninitialized;
-    classicDisplayedArtTarget = curTarget;
-    if (classicDisplayedDiscAvailable)
-      bindTextureSafe(gsGlobal, discTexture);
+  // Let the first frame and input run before artwork I/O, including at startup.
+  if (view == UI_VIEW_CLASSIC && titles->total > 0) {
+    isCoverUninitialized = isDiscUninitialized = 1;
+    classicArtRequestedIdx = selectedTitleIdx;
+    classicArtDueMs = uiNowMs();
+    classicEntryFirstFramePending = 1;
   }
 
   // Main UI loop
@@ -619,6 +617,7 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         isDiscUninitialized = 1;
         classicArtRequestedIdx = selectedTitleIdx;
         classicArtSubmittedIdx = -1;
+        classicArtDueMs = uiNowMs() + CLASSIC_ART_SETTLE_MS;
       }
     }
 
@@ -639,23 +638,18 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
       if (requestClassicArt(curTarget->device, curTarget->id, 1) == 0) {
         classicArtSubmittedIdx = selectedTitleIdx;
       } else {
-        // Keep the original loader available if the worker could not start.
-        isCoverUninitialized = loadNextClassicCoverArt(curTarget->device, curTarget->id);
-        isDiscUninitialized = loadDiscArt(curTarget->device, curTarget->id);
-        classicDisplayedCoverAvailable = !isCoverUninitialized;
-        classicDisplayedDiscAvailable = !isDiscUninitialized;
+        // A failed worker leaves placeholders, never blocking file I/O on the UI.
+        isCoverUninitialized = isDiscUninitialized = 1;
+        classicDisplayedCoverAvailable = classicDisplayedDiscAvailable = 0;
         classicDisplayedArtTarget = curTarget;
         classicArtRequestedIdx = -1;
-        // Upload artwork before text is queued so VRAM reuse cannot replace glyphs.
-        if (classicDisplayedCoverAvailable)
-          bindTextureSafe(gsGlobal, coverTexture);
-        if (classicDisplayedDiscAvailable)
-          bindTextureSafe(gsGlobal, discTexture);
       }
     }
     if (view == UI_VIEW_CLASSIC && classicArtSubmittedIdx == selectedTitleIdx) {
       int coverAvailable = 0, discAvailable = 0;
-      int updated = serviceClassicArt(&coverAvailable, &discAvailable);
+      const int allowArtIO = !classicNavHeld &&
+          (int32_t)(uiNowMs() - classicArtDueMs) >= 0;
+      int updated = serviceClassicArt(&coverAvailable, &discAvailable, allowArtIO);
       if (updated & CLASSIC_ART_COVER_READY) {
         classicDisplayedCoverAvailable = coverAvailable;
         classicDisplayedDiscAvailable = 0; // Never pair a new cover with an old disc.
@@ -952,7 +946,8 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
             lunaNavDurationFrames(psbbnAnimationDuration,
                                   gsGlobal->Mode == GS_MODE_PAL ? 50 : 60))
       psbbnAnimationElapsedFrames++;
-    usleep(view == UI_VIEW_CLASSIC && classicArtSubmittedIdx >= 0 ? 3000 : 1000);
+    // Keep the normal frame yield even when artwork is pending.
+    usleep(1000);
 
     // Keep rendering after options close, while ignoring the Triangle press
     // that closed them until the button is released.
@@ -1378,7 +1373,8 @@ int uiLoop(TargetList *titles, int preparedCollectionIdx) {
         classicDisplayedCoverAvailable = 0;
         classicDisplayedDiscAvailable = 0;
         classicArtRequestedIdx = selectedTitleIdx;
-        // Start decoding on entry; requestClassicArt keeps a matching prefetch.
+        classicArtDueMs = uiNowMs();
+        // Keep a matching prefetch; the frame loop services it asynchronously.
         if (requestClassicArt(curTarget->device, curTarget->id, 1) == 0)
           classicArtSubmittedIdx = selectedTitleIdx;
         classicNavHeld = 0;

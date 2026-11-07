@@ -32,7 +32,8 @@ void pumpClassicArtPrefetch(void);
 #define CLASSIC_ART_COVER_READY 1
 #define CLASSIC_ART_DISC_READY 2
 #define CLASSIC_ART_COMPLETE 4
-int serviceClassicArt(int *coverAvailable, int *discAvailable);
+// allowIO gates new reads only; cached covers and completed jobs stay available.
+int serviceClassicArt(int *coverAvailable, int *discAvailable, int allowIO);
 void cancelClassicArt(void);
 void releaseClassicArtVRAM(void);
 void releasePSBBNCovers(void);

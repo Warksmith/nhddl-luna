@@ -24,6 +24,8 @@
 #define ORBIT_RANDOM_STEP_MS 85
 #define CLASSIC_REPEAT_DELAY_MS 260
 #define CLASSIC_REPEAT_INTERVAL_MS 105
+// Coalesce uncached artwork requests during quick taps; cached art has no delay.
+#define CLASSIC_ART_SETTLE_MS 90U
 #define COLLECTION_SCAN_HOLD_MS 450
 #define COLLECTION_SCAN_STEP_MS 100
 #define SCROLL_FAST_HOLD_MS 1500
