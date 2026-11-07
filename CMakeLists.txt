@@ -55,6 +55,7 @@ set(SOURCES
 
     # UI
     src/ui/gui.c
+    src/ui/frame_sync.c
     src/ui/file_manager.c
     src/ui/ring_menu.c
     src/ui/cube_menu.c
