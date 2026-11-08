@@ -54,6 +54,7 @@ set(SOURCES
     src/homebrew_transfer.S
 
     # UI
+    src/ui/ui_config.c
     src/ui/gui.c
     src/ui/frame_sync.c
     src/ui/file_manager.c
